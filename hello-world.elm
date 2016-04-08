@@ -2,6 +2,8 @@ module Hello where
 
 import Html exposing (..)
 import Html.Attributes exposing (..)
+import Html.Events
+import Json.Decode
 import String
 
 fib: Int -> Int
@@ -45,20 +47,31 @@ headerRow a b =
   ]
 
 
-view: Int -> Html
-view n =
-  Html.div [style (margin 50)]
-    [ input [type' "number", value (toString n)] []
-    , br [] []
-    , br [] []
-    , table []
-      (
-        headerRow "n" "Fibonacci value" ::
-        tableBody n [] (columns [(toString >> text), (fib >> toString >> text)])
-      )
-    ]
+numberOfRows: Signal.Mailbox (Json.Decode.Decoder String)
+numberOfRows =
+    Signal.mailbox "0"
 
+
+decodeInt: Json.Decode.Decoder String -> Int
+decodeInt value =
+    1
+
+view: Signal.Address (Json.Decode.Decoder String) -> (Json.Decode.Decoder String) -> Html
+view numberOfRows nStr =
+  let n = decodeInt nStr in
+    Html.div [style (margin 50)]
+      [ input [type' "number", value (toString n), Html.Events.onClick numberOfRows Html.Events.targetValue] []
+      , br [] []
+      , br [] []
+      , table []
+        (
+          headerRow "n" "Fibonacci value" ::
+          tableBody n [] (columns [(toString >> text), (fib >> toString >> text)])
+        )
+      ]
+
+
+main: Signal.Signal Html
 main =
-  let n = 25 in
-    view n
+  Signal.map (view numberOfRows.address) numberOfRows.signal
 
