@@ -6,12 +6,12 @@ import Html.Events
 import Json.Decode
 import String
 
-fib: Int -> Int
-fib a = 
+fib : {a | fib1 : Int, fib2 : Int} -> Int ->  Int
+fib m a = 
   case a of
-  1 -> 1
-  2 -> 1
-  _ -> fib(a-1) + fib(a-2)
+  1 -> m.fib1
+  2 -> m.fib2
+  _ -> fib m (a-1) + fib m (a-2)
 
 
 outline : List (String, String)
@@ -19,27 +19,27 @@ outline =
   [ ("border", "1px solid black") ]
 
 
-margin: Int -> List (String, String)
+margin : Int -> List (String, String)
 margin n =
   [ ("margin", String.concat [n |> toString, "px"]) ]
 
-column: Int -> (Int -> Html) -> Html
+column : Int -> (Int -> Html) -> Html
 column n func =
   td [ style outline ] [ func n ]
 
 
-columns: List (Int -> Html) -> (Int -> Html)
+columns : List (Int -> Html) -> (Int -> Html)
 columns funcs n =
   tr [] (List.map (column n) funcs)
 
-tableBody: Int -> List Html -> (Int -> Html) -> List Html
+tableBody : Int -> List Html -> (Int -> Html) -> List Html
 tableBody n html rowFunc =
     case n of
       0 -> html
       _ -> (tableBody (n-1) [rowFunc n] rowFunc) ++ html
 
 
-headerRow: String -> String -> Html
+headerRow : String -> String -> Html
 headerRow a b =
   tr []
   [ th [style outline] [text a]
@@ -47,31 +47,110 @@ headerRow a b =
   ]
 
 
-numberOfRows: Signal.Mailbox (Json.Decode.Decoder String)
-numberOfRows =
-    Signal.mailbox "0"
+message : Signal.Mailbox Model
+message =
+  Signal.mailbox 
+    { fib1 = 1
+    , fib2 = 1
+    , rows = 10
+    }
 
 
-decodeInt: Json.Decode.Decoder String -> Int
-decodeInt value =
-    1
+update : Model -> Action -> Model
+update model action =
+  case action of
+    UpdateRows rawString ->
+      case (String.toInt rawString) of
+        Ok a -> { model | rows = a }
+        Err _ -> model
+    UpdateFib1 rawString ->
+      case (String.toInt rawString) of
+        Ok a -> { model | fib1 = a }
+        Err _ -> model
+    UpdateFib2 rawString ->
+      case (String.toInt rawString) of
+        Ok a -> { model | fib2 = a }
+        Err _ -> model
+    SetFibonacci -> {model | fib1 = 1, fib2 = 1}
+    SetLucas -> {model | fib1 = 1, fib2 = 3}
 
-view: Signal.Address (Json.Decode.Decoder String) -> (Json.Decode.Decoder String) -> Html
-view numberOfRows nStr =
-  let n = decodeInt nStr in
+
+onChange : Signal.Address Model -> Model -> (String -> Action) -> Attribute
+onChange address model action =
+  Html.Events.on "change" Html.Events.targetValue (\str -> Signal.message address (update model (action str)))
+
+
+onClick : Signal.Address Model -> Model -> Action -> Attribute
+onClick address model action =
+  Html.Events.on "click" Json.Decode.value (\_ -> Signal.message address (update model action))
+
+
+type alias Model =
+  { fib1 : Int
+  , fib2 : Int
+  , rows : Int
+  }
+
+type Action = 
+  UpdateRows String 
+  | UpdateFib1 String 
+  | UpdateFib2 String
+  | SetFibonacci
+  | SetLucas
+
+
+fibonacciTable : Model -> Html
+fibonacciTable model = 
+  table []
+    ( headerRow "N" "Value"
+   :: tableBody model.rows [] (columns [(toString >> text), ((fib model) >> toString >> text)])
+    )
+
+view : Signal.Address Model -> Model -> Html
+view message model =
     Html.div [style (margin 50)]
-      [ input [type' "number", value (toString n), Html.Events.onClick numberOfRows Html.Events.targetValue] []
+      [ input [type' "button", onClick message model SetFibonacci, value "Fibonacci"] []
+      , input [type' "button", onClick message model SetLucas, value "Lucas"] []
       , br [] []
       , br [] []
-      , table []
-        (
-          headerRow "n" "Fibonacci value" ::
-          tableBody n [] (columns [(toString >> text), (fib >> toString >> text)])
-        )
+      , table [] 
+        [ tr [] 
+          [ td [] [ text "1: " ]
+          , td [] 
+            [ input 
+              [type' "number"
+              , value (toString model.fib1)
+              , onChange message model UpdateFib1
+              ] []
+            ]
+          ]
+        , tr [] 
+          [ td [] [ text "2: "]
+          , td [] 
+            [ input 
+              [type' "number"
+              , value (toString model.fib2)
+              , onChange message model UpdateFib2
+              ] []
+            ]
+          ]
+        , tr [] 
+          [ td [] [ text "Rows: "]
+          , td [] 
+            [ input 
+              [type' "number"
+              , value (toString model.rows)
+              , onChange message model UpdateRows
+              ] []
+            ]
+          ]
+        ]
+      , br [] []
+      , fibonacciTable model
       ]
 
 
-main: Signal.Signal Html
+main : Signal.Signal Html
 main =
-  Signal.map (view numberOfRows.address) numberOfRows.signal
+  Signal.map (view message.address) message.signal
 
