@@ -23,21 +23,11 @@ margin : Int -> List (String, String)
 margin n =
   [ ("margin", String.concat [n |> toString, "px"]) ]
 
-column : Int -> (Int -> Html) -> Html
-column n func =
-  td [ style outline ] [ func n ]
-
-
-columns : List (Int -> Html) -> (Int -> Html)
-columns funcs n =
-  tr [] (List.map (column n) funcs)
-
-tableBody : Int -> List Html -> (Int -> Html) -> List Html
-tableBody n html rowFunc =
-    case n of
-      0 -> html
-      _ -> (tableBody (n-1) [rowFunc n] rowFunc) ++ html
-
+rowNumberAndFunc func n =
+  tr [] [
+    td [] [text (toString n)],
+    td [] [text (toString (func n))]
+  ]
 
 headerRow : String -> String -> Html
 headerRow a b =
@@ -99,11 +89,18 @@ type Action =
   | SetLucas
 
 
+range : Int -> List Int
+range n =
+  case n of
+    0 -> []
+    _ -> (range (n-1)) ++ [n]
+
+
 fibonacciTable : Model -> Html
 fibonacciTable model = 
   table []
-    ( headerRow "N" "Value"
-   :: tableBody model.rows [] (columns [(toString >> text), ((fib model) >> toString >> text)])
+    ( [headerRow "N" "Value"] ++
+      List.map (rowNumberAndFunc (fib model)) (range model.rows)
     )
 
 view : Signal.Address Model -> Model -> Html
