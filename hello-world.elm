@@ -25,8 +25,8 @@ margin n =
 
 rowNumberAndFunc func n =
   tr [] [
-    td [] [text (toString n)],
-    td [] [text (toString (func n))]
+    td [style outline] [text (toString n)],
+    td [style outline] [text (toString (func n))]
   ]
 
 headerRow : String -> String -> Html
@@ -37,18 +37,25 @@ headerRow a b =
   ]
 
 
-message : Signal.Mailbox Model
+type Action = 
+  NoOp
+  | UpdateRows String 
+  | UpdateFib1 String 
+  | UpdateFib2 String
+  | SetFibonacci
+  | SetLucas
+
+
+message : Signal.Mailbox Action
 message =
   Signal.mailbox 
-    { fib1 = 1
-    , fib2 = 1
-    , rows = 10
-    }
+    NoOp
 
 
-update : Model -> Action -> Model
-update model action =
+update : Action -> Model -> Model
+update action model =
   case action of
+    NoOp -> model
     UpdateRows rawString ->
       case (String.toInt rawString) of
         Ok a -> { model | rows = a }
@@ -65,14 +72,14 @@ update model action =
     SetLucas -> {model | fib1 = 1, fib2 = 3}
 
 
-onChange : Signal.Address Model -> Model -> (String -> Action) -> Attribute
-onChange address model action =
-  Html.Events.on "change" Html.Events.targetValue (\str -> Signal.message address (update model (action str)))
+onChange : Signal.Address Action -> (String -> Action) -> Attribute
+onChange address action =
+  Html.Events.on "change" Html.Events.targetValue (\str -> Signal.message address (action str))
 
 
-onClick : Signal.Address Model -> Model -> Action -> Attribute
-onClick address model action =
-  Html.Events.on "click" Json.Decode.value (\_ -> Signal.message address (update model action))
+onClick : Signal.Address Action -> Action -> Attribute
+onClick address action =
+  Html.Events.on "click" Json.Decode.value (\_ -> Signal.message address action)
 
 
 type alias Model =
@@ -80,13 +87,6 @@ type alias Model =
   , fib2 : Int
   , rows : Int
   }
-
-type Action = 
-  UpdateRows String 
-  | UpdateFib1 String 
-  | UpdateFib2 String
-  | SetFibonacci
-  | SetLucas
 
 
 range : Int -> List Int
@@ -103,11 +103,11 @@ fibonacciTable model =
       List.map (rowNumberAndFunc (fib model)) (range model.rows)
     )
 
-view : Signal.Address Model -> Model -> Html
-view message model =
+view : Model -> Html
+view model =
     Html.div [style (margin 50)]
-      [ input [type' "button", onClick message model SetFibonacci, value "Fibonacci"] []
-      , input [type' "button", onClick message model SetLucas, value "Lucas"] []
+      [ input [type' "button", onClick message.address SetFibonacci, value "Fibonacci"] []
+      , input [type' "button", onClick message.address SetLucas, value "Lucas"] []
       , br [] []
       , br [] []
       , table [] 
@@ -117,7 +117,7 @@ view message model =
             [ input 
               [type' "number"
               , value (toString model.fib1)
-              , onChange message model UpdateFib1
+              , onChange message.address UpdateFib1
               ] []
             ]
           ]
@@ -127,7 +127,7 @@ view message model =
             [ input 
               [type' "number"
               , value (toString model.fib2)
-              , onChange message model UpdateFib2
+              , onChange message.address UpdateFib2
               ] []
             ]
           ]
@@ -137,7 +137,7 @@ view message model =
             [ input 
               [type' "number"
               , value (toString model.rows)
-              , onChange message model UpdateRows
+              , onChange message.address UpdateRows
               ] []
             ]
           ]
@@ -147,7 +147,12 @@ view message model =
       ]
 
 
+model : Signal.Signal Model
+model = 
+  Signal.foldp update (Model 1 1 10) message.signal
+
+
 main : Signal.Signal Html
 main =
-  Signal.map (view message.address) message.signal
+  Signal.map view model
 
