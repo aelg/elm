@@ -6,177 +6,273 @@ import Signal exposing (map, foldp)
 import Color exposing (..)
 import Mouse
 import Time
+import Html
 
+
+----- Model -----
+type alias Pos =
+  { x : Float
+  , y : Float
+  }
+
+
+type alias Ball = 
+  { p : (Float, Float)
+  , v : (Float, Float)
+  , size : Float
+  , color : Color
+  , lastP : (Float, Float)
+  }
+
+
+type alias Paddle = 
+  { width : Float
+  , height : Float
+  , pos : Float
+  , color : Color
+  }
+
+type alias Canvas = 
+  { width : Float
+  , height : Float
+  , color : Color
+  }
+
+type alias Model =
+  { canvas  : Canvas
+  , leftPaddle : Paddle
+  , rightPaddle : Paddle
+  , ball : Ball
+  , score : (Int, Int)
+  , aiSpeed : Float
+  }
+
+model0 : Model
+model0 = 
+  { canvas = Canvas 800 500 black
+  , rightPaddle = Paddle 10 100 0 white
+  , leftPaddle = Paddle 10 100 0 white
+  , ball = Ball (0,0) (-100,40) 10 white (0, 0)
+  , score = (0, 0)
+  , aiSpeed = 30
+  }
+
+----- Actions -----
 type Action = 
   NoOp
   | MouseMove (Float, Float)
   | Tick Time.Time
 
+getBorders : Canvas -> (Float, Float)
+getBorders canvas = (canvas.width/2, canvas.height/2)
 
-type alias Pos =
-  {
-    x : Float
-  , y : Float
-  }
+getMaxX = getBorders >> fst
+getMaxY = getBorders >> snd
 
+absoluteToCanvasRelative : Canvas -> (Float, Float) -> (Float, Float)
+absoluteToCanvasRelative canvas (x, y) =
+  let (maxX, maxY) = getBorders canvas
+  in (x - maxX, -(y - maxY))
 
-type alias Model =
-  {
-    canvasWidth : Float
-  , canvasHeight : Float
-  , backgroundColor : Color
-  , foregroundColor : Color
-  , leftPos : Float
-  , rightPos : Float
-  , rightPos : Float
-  , ballPos : Pos
-  , ballVelocity : Pos
-  }
+--- Paddle movement ---
+paddleMaxPos : Canvas -> Paddle -> Float
+paddleMaxPos canvas paddle = 
+  getMaxY canvas - paddle.height/2
 
+updatePaddlePos : Canvas -> Float -> Paddle -> Paddle
+updatePaddlePos canvas y paddle =
+  let maxPos = paddleMaxPos canvas paddle
+  in {paddle | pos = min maxPos <| max -maxPos y}
 
-model0 : Model
-model0 = 
-  {
-    canvasWidth = 800
-  , canvasHeight = 500
-  , backgroundColor = black
-  , foregroundColor = white
-  , rightPos = 0
-  , leftPos = 100
-  , ballPos = {x = 0, y = 0}
-  , ballVelocity = {x = 100, y = 40}
-  }
+onMouseMove : Model -> (Float, Float) -> Paddle
+onMouseMove model (_, y) =
+  updatePaddlePos model.canvas y model.leftPaddle
 
+--- AI movement ---
+moveAI : Time.Time -> Model -> Model
+moveAI timeDiff model = 
+  let (_,y) = model.ball.p
+      rightPaddle = model.rightPaddle
+      aiPos = rightPaddle.pos
+  in if aiPos > y
+       then { model | rightPaddle = {rightPaddle | pos = 
+              aiPos - model.aiSpeed * Time.inSeconds timeDiff
+            }}
+     else if aiPos < y
+       then { model | rightPaddle = {rightPaddle | pos = 
+              aiPos + model.aiSpeed * Time.inSeconds timeDiff
+            }}
+     else model
 
-absoluteToCanvasRelative : Model -> (Float, Float) -> (Float, Float)
-absoluteToCanvasRelative model (x, y) =
-  (x - model.canvasWidth/2, -(y - model.canvasHeight/2))
+--- Ball movement ---
+moveBall : Time.Time -> Model -> Model
+moveBall timeDiff model = 
+  let ball = model.ball
+      (x,y) = ball.p
+      (vx,vy) = ball.v
+  in {model | ball = {ball | p = 
+       ( x + vx * Time.inSeconds timeDiff
+       , y + vy * Time.inSeconds timeDiff
+       )
+     , lastP = ball.p
+     }}
 
+bounceX : Ball -> Ball
+bounceX ball = 
+  {ball | v = (\(a,b) -> (negate a, b)) ball.v}
 
-onMouseMove : Model -> (Float, Float) -> Model
-onMouseMove model (x, y) =
-  {model | leftPos = y}
+bounceY : Ball -> Ball
+bounceY ball = 
+  {ball | v = (\(a,b) -> (a, negate b)) ball.v}
 
+shouldBounceLeftPaddle : Model -> Ball -> Bool
+shouldBounceLeftPaddle model ball = 
+  let (x,y) = ball.p
+      (lx,_) = ball.lastP
+      (vx,_) = ball.v
+      paddleEdge = -((getMaxX model.canvas) - 20) + model.leftPaddle.width/2
+      paddleTop = model.leftPaddle.pos + model.leftPaddle.height/2
+      paddleBottom = model.leftPaddle.pos - model.leftPaddle.height/2
+  in vx < 0 
+  && x < paddleEdge + ball.size
+  && lx >= paddleEdge + ball.size
+  && y <= paddleTop
+  && y >= paddleBottom
 
-onTick : Model -> Time.Time -> Model
-onTick model timeDiff = 
-  let 
-    pos = model.ballPos
-    velocity = model.ballVelocity
+shouldBounceRightPaddle : Model -> Ball -> Bool
+shouldBounceRightPaddle model ball = 
+  let (x,y) = ball.p
+      (lx,_) = ball.lastP
+      (vx,_) = ball.v
+      paddleEdge = (getMaxX model.canvas) - 20 - model.rightPaddle.width/2
+      paddleTop = model.rightPaddle.pos + model.rightPaddle.height/2
+      paddleBottom = model.rightPaddle.pos - model.rightPaddle.height/2
+  in vx > 0 
+  && x > paddleEdge - ball.size
+  && lx <= paddleEdge - ball.size
+  && y <= paddleTop
+  && y >= paddleBottom
+
+shouldBounceY : Model -> Ball -> Bool
+shouldBounceY model ball=
+  let (_,y) = ball.p
+      (_,vy) = ball.v
   in
-    {
-      model | 
-        ballPos = 
-          {
-            x = pos.x + velocity.x * Time.inSeconds timeDiff
-          , y = pos.y + velocity.y * Time.inSeconds timeDiff
-          }
-    }
-    |> physics
+     vy < 0 && y < -(getMaxY model.canvas - ball.size)
+  || vy > 0 && y > getMaxY model.canvas - ball.size
 
 physics : Model -> Model
 physics model = 
-  let 
-    pos = model.ballPos
-    velocity = model.ballVelocity
-  in
-    if abs pos.x > model.canvasWidth/2
-    then
-      {
-        model | 
-          ballVelocity = 
-            { 
-              x = -velocity.x
-            , y = velocity.y
-            }
-      }
-    else if abs pos.y > model.canvasHeight/2
-      then
-        {
-          model | 
-            ballVelocity = 
-              { 
-                x = velocity.x
-              , y = -velocity.y
-              }
-        }
-        else model
+  let ball = model.ball 
+      (x,y) = ball.p
+      (vx, vy) = ball.v
+  in {model | ball = 
+     if shouldBounceLeftPaddle model ball || shouldBounceRightPaddle model ball
+       then bounceX ball
+     else if shouldBounceY model ball
+       then bounceY ball
+     else ball
+   }
 
+gameLost : Model -> Model
+gameLost model = 
+  let (x,_) = model.ball.p
+  in if x < -(getMaxX model.canvas)
+       then { model | 
+                score = (fst model.score, snd model.score + 1)
+              , ball = model0.ball
+              }
+     else if x > getMaxX model.canvas
+       then { model | 
+                score = (fst model.score + 1, snd model.score)
+              , ball = model0.ball
+            }
+     else model
+
+onTick : Model -> Time.Time -> Model
+onTick model timeDiff = 
+  model
+    |> moveAI timeDiff
+    |> moveBall timeDiff
+    |> physics
+    |> gameLost
+
+--- Update ---
 update : Action -> Model -> Model
 update action model = 
   case action of
     NoOp -> model
-    MouseMove pos -> onMouseMove model <| absoluteToCanvasRelative model pos
+    MouseMove pos -> 
+      {model | leftPaddle = onMouseMove model <| absoluteToCanvasRelative model.canvas pos}
     Tick time -> onTick model time
 
-
-paddle : Model -> Form
-paddle model = 
-  rect 10 100
-    |> filled model.foregroundColor
-
+----- View -----
+paddle : Paddle -> Form
+paddle paddle = 
+  rect paddle.width paddle.height
+    |> filled paddle.color
+    |> moveY paddle.pos
 
 leftPaddle : Model -> Form
 leftPaddle model =
-  paddle model
-    |> moveX -(model.canvasWidth/2 - 20)
-    |> moveY model.leftPos
-
+  paddle model.leftPaddle
+    |> moveX -((getMaxX model.canvas) - 20)
 
 rightPaddle : Model -> Form
 rightPaddle model =
-  paddle model
-    |> moveX (model.canvasWidth/2 - 20)
-    |> moveY model.rightPos
+  paddle model.rightPaddle
+    |> moveX (getMaxX model.canvas - 20)
 
+ball : Ball -> Form
+ball ball =
+  circle ball.size
+    |> filled ball.color
+    |> move ball.p
 
-ball : Model -> Form
-ball model =
-  circle 10
-    |> filled model.foregroundColor
-    |> moveX model.ballPos.x
-    |> moveY model.ballPos.y
+canvas : Canvas -> List Form -> Element
+canvas canvas forms = 
+  collage (floor canvas.width) (floor canvas.height) forms 
+  |> color canvas.color
 
+score : (Int, Int) -> Element
+score score = 
+  flow down 
+    [ show ("Left Player: " ++ (toString <| fst score))
+    , show ("Right Player: " ++  (toString <| snd score))
+    ]
 
 view : Model -> Element
 view model = 
-  flow right 
-    [ 
-      collage (floor model.canvasWidth) (floor model.canvasHeight)
-        [
-          leftPaddle model
+  flow down
+    [ canvas model.canvas
+        [ leftPaddle model
         , rightPaddle model
-        , ball model
+        , ball model.ball
         ]
-        |> color model.backgroundColor
+    , score model.score
     ]
 
-
+----- Wiring -----
 mailbox : Signal.Mailbox Action
 mailbox = Signal.mailbox NoOp
-
 
 mouse : (Int, Int) -> Action
 mouse (x, y) = MouseMove (toFloat x, toFloat y)
 
-
 ticker : Time.Time -> Action
 ticker time = Tick time
-
 
 mergeSignals : Signal Action
 mergeSignals =
   Signal.mergeMany 
-  [
-    Signal.map identity mailbox.signal,
-    Signal.map mouse Mouse.position,
-    Signal.map ticker (Time.fps 40)
+  [ Signal.map identity mailbox.signal
+  , Signal.map mouse Mouse.position
+  , Signal.map ticker (Time.fps 40)
   ]
 
 
 model : Signal Model
 model = Signal.foldp update model0 mergeSignals
-
 
 main : Signal Element
 main = Signal.map view model
