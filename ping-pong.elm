@@ -6,7 +6,7 @@ import Signal exposing (map, foldp)
 import Color exposing (..)
 import Mouse
 import Time
-import Html
+import Text
 
 
 ----- Model -----
@@ -68,7 +68,7 @@ model0 =
 ----- Actions -----
 type Action = 
   NoOp
-  | MouseMove (Float, Float)
+  | MouseMove (Int, Int)
   | MouseClick
   | Tick Time.Time
 
@@ -78,10 +78,10 @@ getBorders canvas = (canvas.width/2, canvas.height/2)
 getMaxX = getBorders >> fst
 getMaxY = getBorders >> snd
 
-absoluteToCanvasRelative : Canvas -> (Float, Float) -> (Float, Float)
+absoluteToCanvasRelative : Canvas -> (Int, Int) -> (Float, Float)
 absoluteToCanvasRelative canvas (x, y) =
   let (maxX, maxY) = getBorders canvas
-  in (x - maxX, -(y - maxY))
+  in (toFloat x - maxX, -(toFloat y - maxY))
 
 --- Paddle movement ---
 paddleMaxPos : Canvas -> Paddle -> Float
@@ -93,12 +93,12 @@ updatePaddlePos canvas y paddle =
   let maxPos = paddleMaxPos canvas paddle
   in {paddle | pos = min maxPos <| max -maxPos y}
 
-onMouseMove : Model -> (Float, Float) -> Paddle
+onMouseMove : Model -> (Float, Float) -> Model
 onMouseMove model (_, y) =
   if model.state == Running then
-    updatePaddlePos model.canvas y model.leftPaddle
+    {model | leftPaddle = updatePaddlePos model.canvas y model.leftPaddle}
   else
-    model.leftPaddle
+    model
 
 --- AI movement ---
 moveAI : Time.Time -> Model -> Model
@@ -190,8 +190,8 @@ changeY model paddle ball =
       offset = paddle.pos - y
   in { ball | v = (vx, vy-offset) }
 
-ballMovement : Model -> Model
-ballMovement model = 
+ballCollision : Model -> Model
+ballCollision model = 
   let ball = model.ball 
       (x,y) = ball.p
       (vx, vy) = ball.v
@@ -213,14 +213,15 @@ ballMovement model =
 gameLost : Model -> Model
 gameLost model = 
   let (x,_) = model.ball.p
+      (leftScore, rightScore) = model.score
   in if x < -(getMaxX model.canvas) then 
         { model | 
-          score = (fst model.score, snd model.score + 1)
+          score = (leftScore, rightScore + 1)
         , ball = model0.ball
         }
      else if x > getMaxX model.canvas then 
         { model | 
-          score = (fst model.score + 1, snd model.score)
+          score = (leftScore + 1, rightScore)
         , ball = model0.ball
         }
      else model
@@ -238,9 +239,9 @@ onTick model timeDiff =
   if model.state == Running
      then
   model
-    |> moveAI timeDiff
     |> moveBall timeDiff
-    |> ballMovement
+    |> moveAI timeDiff
+    |> ballCollision
     |> increaseSpeed timeDiff
     |> gameLost
     else model
@@ -256,8 +257,7 @@ update : Action -> Model -> Model
 update action model = 
   case action of
     NoOp -> model
-    MouseMove pos -> 
-      {model | leftPaddle = onMouseMove model <| absoluteToCanvasRelative model.canvas pos}
+    MouseMove pos -> onMouseMove model <| absoluteToCanvasRelative model.canvas pos
     MouseClick -> toggleState model
     Tick time -> onTick model time
 
@@ -289,11 +289,34 @@ canvas canvas forms =
   collage (floor canvas.width) (floor canvas.height) forms 
   |> color canvas.color
 
-score : (Int, Int) -> Element
-score score = 
-  flow down 
-    [ show ("Left Player: " ++ (toString <| fst score))
-    , show ("Right Player: " ++  (toString <| snd score))
+scoreText : Color -> String -> Element
+scoreText color s =
+  s
+    |> Text.fromString
+    |> Text.height 30
+    |> Text.monospace
+    |> Text.color color
+    |> leftAligned
+
+score : Model -> Element
+score model = 
+  let (leftScore,rightScore) = model.score
+      canvasWidth = floor model.canvas.width
+      leftColor = if leftScore > rightScore then green 
+                  else if leftScore < rightScore then red 
+                  else yellow
+      rightColor = if rightScore > leftScore then green 
+                   else if rightScore < leftScore then red 
+                   else yellow
+  in flow down 
+    [ spacer canvasWidth 1
+    , color black 
+        <| container canvasWidth 100 middle 
+        <| flow right 
+          [ scoreText leftColor ("Left Player: " ++ (toString leftScore))
+          , spacer 100 1
+          , scoreText rightColor ("Right Player: " ++  (toString rightScore))
+          ]
     ]
 
 view : Model -> Element
@@ -304,29 +327,16 @@ view model =
         , rightPaddle model
         , ball model.ball
         ]
-    , score model.score
+    , score model
     ]
 
 ----- Wiring -----
-mailbox : Signal.Mailbox Action
-mailbox = Signal.mailbox NoOp
-
-mouse : (Int, Int) -> Action
-mouse (x, y) = MouseMove (toFloat x, toFloat y)
-
-mouseClick : () -> Action
-mouseClick () = MouseClick
-
-ticker : Time.Time -> Action
-ticker time = Tick time
-
 mergeSignals : Signal Action
 mergeSignals =
   Signal.mergeMany 
-  [ Signal.map identity mailbox.signal
-  , Signal.map mouse Mouse.position
-  , Signal.map mouseClick Mouse.clicks
-  , Signal.map ticker (Time.fps 40)
+  [ Signal.map MouseMove Mouse.position
+  , Signal.map (always MouseClick) Mouse.clicks
+  , Signal.map Tick (Time.fps 100)
   ]
 
 
