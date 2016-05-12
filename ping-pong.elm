@@ -106,22 +106,18 @@ moveAI timeDiff model =
   let (_,y) = model.ball.p
       rightPaddle = model.rightPaddle
       aiPos = rightPaddle.pos
+      diff = abs (aiPos - y)
+      direction = if aiPos > y then -1 else 1
   in 
-     if aiPos > y + model.aiSpeed * Time.inSeconds timeDiff then 
+     if diff >= 1 then
         { model | rightPaddle = 
             updatePaddlePos 
               model.canvas 
-              (aiPos - model.aiSpeed * Time.inSeconds timeDiff)
+              (aiPos + min diff (model.aiSpeed * Time.inSeconds timeDiff) * direction)
               rightPaddle
         }
-     else if aiPos < y - model.aiSpeed * Time.inSeconds timeDiff then 
-        { model | rightPaddle = 
-            updatePaddlePos 
-              model.canvas 
-              (aiPos + model.aiSpeed * Time.inSeconds timeDiff)
-              rightPaddle
-        }
-     else model
+     else
+        model
 
 --- Ball movement ---
 moveBall : Time.Time -> Model -> Model
@@ -190,25 +186,35 @@ changeY model paddle ball =
       offset = paddle.pos - y
   in { ball | v = (vx, vy-offset) }
 
+bounceLeftPaddle : Model -> Ball -> Ball
+bounceLeftPaddle model ball = 
+  if shouldBounceLeftPaddle model ball then
+     ball
+       |> bounceX
+       |> changeY model model.leftPaddle
+  else ball
+
+bounceRightPaddle : Model -> Ball -> Ball
+bounceRightPaddle model ball = 
+  if shouldBounceRightPaddle model ball then
+     ball
+       |> bounceX
+       |> changeY model model.rightPaddle
+  else ball
+
+bounceWalls : Model -> Ball -> Ball
+bounceWalls model ball = 
+  if shouldBounceY model ball then bounceY ball
+  else ball
+
 ballCollision : Model -> Model
 ballCollision model = 
-  let ball = model.ball 
-      (x,y) = ball.p
-      (vx, vy) = ball.v
-  in {model | ball = 
-     if shouldBounceLeftPaddle model ball then 
-        ball 
-          |> bounceX
-          |> changeY model model.leftPaddle
-     else if shouldBounceRightPaddle model ball then 
-        ball 
-          |> bounceX
-          |> changeY model model.rightPaddle
-     else if shouldBounceY model ball then 
-        ball 
-          |> bounceY
-     else ball
-     }
+  {model | ball = 
+    model.ball 
+      |> bounceLeftPaddle model
+      |> bounceRightPaddle model
+      |> bounceWalls model
+  }
 
 gameLost : Model -> Model
 gameLost model = 
