@@ -38,6 +38,9 @@ type alias Canvas =
   , color : Color
   }
 
+type State = 
+  Running | Paused
+
 type alias Model =
   { canvas  : Canvas
   , leftPaddle : Paddle
@@ -45,6 +48,7 @@ type alias Model =
   , ball : Ball
   , score : (Int, Int)
   , aiSpeed : Float
+  , state : State
   }
 
 model0 : Model
@@ -52,15 +56,17 @@ model0 =
   { canvas = Canvas 800 500 black
   , rightPaddle = Paddle 10 100 0 white
   , leftPaddle = Paddle 10 100 0 white
-  , ball = Ball (0,0) (-100,40) 10 white (0, 0)
+  , ball = Ball (0,0) (-400,100) 10 white (0, 0)
   , score = (0, 0)
-  , aiSpeed = 30
+  , aiSpeed = 200
+  , state = Paused
   }
 
 ----- Actions -----
 type Action = 
   NoOp
   | MouseMove (Float, Float)
+  | MouseClick
   | Tick Time.Time
 
 getBorders : Canvas -> (Float, Float)
@@ -86,7 +92,10 @@ updatePaddlePos canvas y paddle =
 
 onMouseMove : Model -> (Float, Float) -> Paddle
 onMouseMove model (_, y) =
-  updatePaddlePos model.canvas y model.leftPaddle
+  if model.state == Running then
+    updatePaddlePos model.canvas y model.leftPaddle
+  else
+    model.leftPaddle
 
 --- AI movement ---
 moveAI : Time.Time -> Model -> Model
@@ -94,14 +103,20 @@ moveAI timeDiff model =
   let (_,y) = model.ball.p
       rightPaddle = model.rightPaddle
       aiPos = rightPaddle.pos
-  in if aiPos > y
-       then { model | rightPaddle = {rightPaddle | pos = 
-              aiPos - model.aiSpeed * Time.inSeconds timeDiff
-            }}
-     else if aiPos < y
-       then { model | rightPaddle = {rightPaddle | pos = 
-              aiPos + model.aiSpeed * Time.inSeconds timeDiff
-            }}
+  in if aiPos > y + model.aiSpeed * Time.inSeconds timeDiff
+       then { model | rightPaddle = 
+              updatePaddlePos 
+                model.canvas 
+                (aiPos - model.aiSpeed * Time.inSeconds timeDiff)
+                rightPaddle
+            }
+     else if aiPos < y - model.aiSpeed * Time.inSeconds timeDiff 
+       then { model | rightPaddle = 
+              updatePaddlePos 
+                model.canvas 
+                (aiPos + model.aiSpeed * Time.inSeconds timeDiff)
+                rightPaddle
+            }
      else model
 
 --- Ball movement ---
@@ -154,12 +169,19 @@ shouldBounceRightPaddle model ball =
   && y >= paddleBottom
 
 shouldBounceY : Model -> Ball -> Bool
-shouldBounceY model ball=
+shouldBounceY model ball =
   let (_,y) = ball.p
       (_,vy) = ball.v
   in
      vy < 0 && y < -(getMaxY model.canvas - ball.size)
   || vy > 0 && y > getMaxY model.canvas - ball.size
+
+changeY : Model -> Paddle -> Ball -> Ball
+changeY model paddle ball = 
+  let (_,y) = ball.p
+      (vx,vy) = ball.v
+      offset = model.leftPaddle.pos - y
+  in { ball | v = (vx, vy-offset*1) }
 
 physics : Model -> Model
 physics model = 
@@ -167,10 +189,17 @@ physics model =
       (x,y) = ball.p
       (vx, vy) = ball.v
   in {model | ball = 
-     if shouldBounceLeftPaddle model ball || shouldBounceRightPaddle model ball
-       then bounceX ball
+     if shouldBounceLeftPaddle model ball 
+       then ball 
+              |> bounceX
+              |> changeY model model.rightPaddle
+     else if shouldBounceRightPaddle model ball
+       then ball 
+              |> bounceX
+              |> changeY model model.rightPaddle
      else if shouldBounceY model ball
-       then bounceY ball
+       then ball 
+              |> bounceY
      else ball
    }
 
@@ -189,13 +218,29 @@ gameLost model =
             }
      else model
 
+increaseSpeed : Time.Time -> Model -> Model
+increaseSpeed timeDiff model = 
+  let ball = model.ball
+      (vx,vy) = ball.v
+  in { model | ball = { ball | v = (vx + 10 * (vx/abs vx) * Time.inSeconds timeDiff, vy)}}
+
 onTick : Model -> Time.Time -> Model
 onTick model timeDiff = 
+  if model.state == Running
+     then
   model
     |> moveAI timeDiff
     |> moveBall timeDiff
     |> physics
+    |> increaseSpeed timeDiff
     |> gameLost
+    else model
+
+toggleState : Model -> Model
+toggleState model = 
+  if model.state == Running
+  then { model | state = Paused }
+  else { model | state = Running }
 
 --- Update ---
 update : Action -> Model -> Model
@@ -204,6 +249,7 @@ update action model =
     NoOp -> model
     MouseMove pos -> 
       {model | leftPaddle = onMouseMove model <| absoluteToCanvasRelative model.canvas pos}
+    MouseClick -> toggleState model
     Tick time -> onTick model time
 
 ----- View -----
@@ -259,6 +305,9 @@ mailbox = Signal.mailbox NoOp
 mouse : (Int, Int) -> Action
 mouse (x, y) = MouseMove (toFloat x, toFloat y)
 
+mouseClick : () -> Action
+mouseClick () = MouseClick
+
 ticker : Time.Time -> Action
 ticker time = Tick time
 
@@ -267,6 +316,7 @@ mergeSignals =
   Signal.mergeMany 
   [ Signal.map identity mailbox.signal
   , Signal.map mouse Mouse.position
+  , Signal.map mouseClick Mouse.clicks
   , Signal.map ticker (Time.fps 40)
   ]
 
