@@ -35,6 +35,7 @@ type alias Paddle =
 type alias Canvas = 
   { width : Float
   , height : Float
+  , paddlePadding : Float
   , color : Color
   }
 
@@ -48,17 +49,19 @@ type alias Model =
   , ball : Ball
   , score : (Int, Int)
   , aiSpeed : Float
+  , speedIncrease : Float
   , state : State
   }
 
 model0 : Model
 model0 = 
-  { canvas = Canvas 800 500 black
+  { canvas = Canvas 800 500 40 black
   , rightPaddle = Paddle 10 100 0 white
   , leftPaddle = Paddle 10 100 0 white
   , ball = Ball (0,0) (-400,100) 10 white (0, 0)
   , score = (0, 0)
   , aiSpeed = 200
+  , speedIncrease = 10
   , state = Paused
   }
 
@@ -103,20 +106,21 @@ moveAI timeDiff model =
   let (_,y) = model.ball.p
       rightPaddle = model.rightPaddle
       aiPos = rightPaddle.pos
-  in if aiPos > y + model.aiSpeed * Time.inSeconds timeDiff
-       then { model | rightPaddle = 
-              updatePaddlePos 
-                model.canvas 
-                (aiPos - model.aiSpeed * Time.inSeconds timeDiff)
-                rightPaddle
-            }
-     else if aiPos < y - model.aiSpeed * Time.inSeconds timeDiff 
-       then { model | rightPaddle = 
-              updatePaddlePos 
-                model.canvas 
-                (aiPos + model.aiSpeed * Time.inSeconds timeDiff)
-                rightPaddle
-            }
+  in 
+     if aiPos > y + model.aiSpeed * Time.inSeconds timeDiff then 
+        { model | rightPaddle = 
+            updatePaddlePos 
+              model.canvas 
+              (aiPos - model.aiSpeed * Time.inSeconds timeDiff)
+              rightPaddle
+        }
+     else if aiPos < y - model.aiSpeed * Time.inSeconds timeDiff then 
+        { model | rightPaddle = 
+            updatePaddlePos 
+              model.canvas 
+              (aiPos + model.aiSpeed * Time.inSeconds timeDiff)
+              rightPaddle
+        }
      else model
 
 --- Ball movement ---
@@ -140,12 +144,14 @@ bounceY : Ball -> Ball
 bounceY ball = 
   {ball | v = (\(a,b) -> (a, negate b)) ball.v}
 
+-- TODO : Make nicer
 shouldBounceLeftPaddle : Model -> Ball -> Bool
 shouldBounceLeftPaddle model ball = 
   let (x,y) = ball.p
       (lx,_) = ball.lastP
       (vx,_) = ball.v
-      paddleEdge = -((getMaxX model.canvas) - 20) + model.leftPaddle.width/2
+      paddleEdge = 
+        -((getMaxX model.canvas) - model.canvas.paddlePadding) + model.leftPaddle.width/2
       paddleTop = model.leftPaddle.pos + model.leftPaddle.height/2
       paddleBottom = model.leftPaddle.pos - model.leftPaddle.height/2
   in vx < 0 
@@ -159,7 +165,8 @@ shouldBounceRightPaddle model ball =
   let (x,y) = ball.p
       (lx,_) = ball.lastP
       (vx,_) = ball.v
-      paddleEdge = (getMaxX model.canvas) - 20 - model.rightPaddle.width/2
+      paddleEdge = 
+        (getMaxX model.canvas) - model.canvas.paddlePadding - model.rightPaddle.width/2
       paddleTop = model.rightPaddle.pos + model.rightPaddle.height/2
       paddleBottom = model.rightPaddle.pos - model.rightPaddle.height/2
   in vx > 0 
@@ -180,49 +187,51 @@ changeY : Model -> Paddle -> Ball -> Ball
 changeY model paddle ball = 
   let (_,y) = ball.p
       (vx,vy) = ball.v
-      offset = model.leftPaddle.pos - y
-  in { ball | v = (vx, vy-offset*1) }
+      offset = paddle.pos - y
+  in { ball | v = (vx, vy-offset) }
 
-physics : Model -> Model
-physics model = 
+ballMovement : Model -> Model
+ballMovement model = 
   let ball = model.ball 
       (x,y) = ball.p
       (vx, vy) = ball.v
   in {model | ball = 
-     if shouldBounceLeftPaddle model ball 
-       then ball 
-              |> bounceX
-              |> changeY model model.rightPaddle
-     else if shouldBounceRightPaddle model ball
-       then ball 
-              |> bounceX
-              |> changeY model model.rightPaddle
-     else if shouldBounceY model ball
-       then ball 
-              |> bounceY
+     if shouldBounceLeftPaddle model ball then 
+        ball 
+          |> bounceX
+          |> changeY model model.leftPaddle
+     else if shouldBounceRightPaddle model ball then 
+        ball 
+          |> bounceX
+          |> changeY model model.rightPaddle
+     else if shouldBounceY model ball then 
+        ball 
+          |> bounceY
      else ball
-   }
+     }
 
 gameLost : Model -> Model
 gameLost model = 
   let (x,_) = model.ball.p
-  in if x < -(getMaxX model.canvas)
-       then { model | 
-                score = (fst model.score, snd model.score + 1)
-              , ball = model0.ball
-              }
-     else if x > getMaxX model.canvas
-       then { model | 
-                score = (fst model.score + 1, snd model.score)
-              , ball = model0.ball
-            }
+  in if x < -(getMaxX model.canvas) then 
+        { model | 
+          score = (fst model.score, snd model.score + 1)
+        , ball = model0.ball
+        }
+     else if x > getMaxX model.canvas then 
+        { model | 
+          score = (fst model.score + 1, snd model.score)
+        , ball = model0.ball
+        }
      else model
 
 increaseSpeed : Time.Time -> Model -> Model
 increaseSpeed timeDiff model = 
   let ball = model.ball
       (vx,vy) = ball.v
-  in { model | ball = { ball | v = (vx + 10 * (vx/abs vx) * Time.inSeconds timeDiff, vy)}}
+  in { model | ball = 
+       { ball | v = 
+         (vx + model.speedIncrease * (vx/abs vx) * Time.inSeconds timeDiff, vy)}}
 
 onTick : Model -> Time.Time -> Model
 onTick model timeDiff = 
@@ -231,7 +240,7 @@ onTick model timeDiff =
   model
     |> moveAI timeDiff
     |> moveBall timeDiff
-    |> physics
+    |> ballMovement
     |> increaseSpeed timeDiff
     |> gameLost
     else model
@@ -262,12 +271,12 @@ paddle paddle =
 leftPaddle : Model -> Form
 leftPaddle model =
   paddle model.leftPaddle
-    |> moveX -((getMaxX model.canvas) - 20)
+    |> moveX -((getMaxX model.canvas) - model.canvas.paddlePadding)
 
 rightPaddle : Model -> Form
 rightPaddle model =
   paddle model.rightPaddle
-    |> moveX (getMaxX model.canvas - 20)
+    |> moveX (getMaxX model.canvas - model.canvas.paddlePadding)
 
 ball : Ball -> Form
 ball ball =
