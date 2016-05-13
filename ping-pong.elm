@@ -1,7 +1,6 @@
-
 import Graphics.Collage exposing (..)
 import Graphics.Element exposing (..)
---import Graphics.Element exposing (flow, right, middle)
+import Graphics.Input
 import Signal
 import Color exposing (..)
 import Mouse
@@ -9,13 +8,11 @@ import Keyboard
 import Time
 import Text
 
-
 ----- Model -----
 type alias Pos =
   { x : Float
   , y : Float
   }
-
 
 type alias Ball = 
   { p : (Float, Float)
@@ -25,7 +22,6 @@ type alias Ball =
   , lastP : (Float, Float)
   }
 
-
 type alias Paddle = 
   { name : String
   , width : Float
@@ -34,27 +30,28 @@ type alias Paddle =
   , y : Float
   , score : Int
   , color : Color
-  , controlledBy : Controls
+  , controlledBy : PlayerType
   , speed : Float
   }
 
 type alias Canvas = 
-  { width : Float
-  , height : Float
+  { width : Int
+  , height : Int
   , color : Color
   }
 
 type State = 
   Running | Paused
 
-type Controls = 
-  MouseControls 
+type PlayerType =
+  MouseControls
   | ArrowControls 
   | WasdControls 
   | Computer
 
 type alias Model =
   { canvas  : Canvas
+  , scoreHeight : Int
   , leftPaddle : Paddle
   , rightPaddle : Paddle
   , ball : Ball
@@ -69,6 +66,7 @@ type alias Model =
 model0 : Model
 model0 = 
   { canvas = Canvas 800 500 black
+  , scoreHeight = 100
   , leftPaddle = Paddle "Left Player" 10 100 -360 0 0 white WasdControls 200
   , rightPaddle = Paddle "Right Player" 10 100 360 0 0 white ArrowControls 200
   , ball = Ball (320,0) (-400,100) 10 white (320, 0)
@@ -89,9 +87,11 @@ type Action =
   | ArrowPressed {x:Int, y:Int}
   | WasdPressed {x:Int, y:Int}
   | SpacePressed Bool
+  | ClickedOnLeftPlayer
+  | ClickedOnRightPlayer
 
 getBorders : Canvas -> (Float, Float)
-getBorders canvas = (canvas.width/2, canvas.height/2)
+getBorders canvas = (toFloat canvas.width / 2, toFloat canvas.height / 2)
 
 getMaxX : Canvas -> Float
 getMaxX = getBorders >> fst
@@ -137,7 +137,7 @@ moveAI timeDiff model paddle =
      if diff >= 1 then
             updatePaddlePos 
               model.canvas 
-              (aiPos + min diff paddle.speed * direction * Time.inSeconds timeDiff)
+              (aiPos + min diff (paddle.speed * Time.inSeconds timeDiff) * direction)
               paddle
      else
         paddle
@@ -176,8 +176,8 @@ shouldBouncePaddle model paddle ball =
         else -ball.size
       paddleTop = paddle.y + paddle.height/2
       paddleBottom = paddle.y - paddle.height/2
-  in ((x + ballEdgeOffset > paddleEdge && lx +ballEdgeOffset <= paddleEdge)
-   || (x + ballEdgeOffset < paddleEdge && lx +ballEdgeOffset >= paddleEdge))
+  in ((x + ballEdgeOffset > paddleEdge && lx + ballEdgeOffset <= paddleEdge)
+   || (x + ballEdgeOffset < paddleEdge && lx + ballEdgeOffset >= paddleEdge))
    && y <= paddleTop
    && y >= paddleBottom
 
@@ -189,6 +189,7 @@ shouldBounceY model ball =
      vy < 0 && y < -(getMaxY model.canvas - ball.size)
   || vy > 0 && y > getMaxY model.canvas - ball.size
 
+-- Adds vertical speed to the ball if it hits of center
 changeY : Model -> Paddle -> Ball -> Ball
 changeY model paddle ball = 
   let (_,y) = ball.p
@@ -256,20 +257,20 @@ movePaddle timeDiff model paddle =
 
 movePaddles : Time.Time -> Model -> Model
 movePaddles timeDiff model = 
-  { model | leftPaddle = movePaddle timeDiff model model.leftPaddle
+  { model |
+    leftPaddle = movePaddle timeDiff model model.leftPaddle
   , rightPaddle = movePaddle timeDiff model model.rightPaddle
   }
 
-onTick : Model -> Time.Time -> Model
-onTick model timeDiff = 
-  if model.state == Running
-     then
-  model
-    |> moveBall timeDiff
-    |> movePaddles timeDiff
-    |> ballCollision
-    |> increaseSpeed timeDiff
-    |> gameLost
+onTick : Time.Time -> Model -> Model
+onTick timeDiff model =
+  if model.state == Running then
+    model
+      |> moveBall timeDiff
+      |> movePaddles timeDiff
+      |> ballCollision
+      |> increaseSpeed timeDiff
+      |> gameLost
   else model
 
 toggleState : Bool -> Model -> Model
@@ -279,6 +280,25 @@ toggleState do model =
     then { model | state = Paused }
     else { model | state = Running }
   else model
+
+cyclePlayerType : Paddle -> Paddle
+cyclePlayerType paddle = 
+  { paddle | 
+    controlledBy = 
+    case paddle.controlledBy of
+      MouseControls -> ArrowControls
+      ArrowControls -> WasdControls
+      WasdControls -> Computer
+      Computer -> MouseControls
+  }
+
+onLeftPlayerClick : Model -> Model
+onLeftPlayerClick model = 
+  { model | leftPaddle = cyclePlayerType model.leftPaddle}
+
+onRightPlayerClick : Model -> Model
+onRightPlayerClick model = 
+  { model | rightPaddle = cyclePlayerType model.rightPaddle }
 
 --- Update ---
 update : Action -> Model -> Model
@@ -290,7 +310,9 @@ update action model =
     ArrowPressed dir -> onArrowPressed model dir
     WasdPressed dir -> onWasdPressed model dir
     SpacePressed pressed -> toggleState pressed model
-    Tick time -> onTick model time
+    Tick time -> onTick time model
+    ClickedOnLeftPlayer -> onLeftPlayerClick model
+    ClickedOnRightPlayer -> onRightPlayerClick model
 
 ----- View -----
 paddle : Paddle -> Form
@@ -314,18 +336,26 @@ shadowBall ball =
     |> move ball.lastP
 
 canvas : Canvas -> List Form -> Element
-canvas canvas forms = 
-  collage (floor canvas.width) (floor canvas.height) forms 
-  |> color canvas.color
+canvas canvas = 
+  collage canvas.width canvas.height  
+    >> color canvas.color
 
 scoreText : Color -> String -> Element
-scoreText color s =
-  s
-    |> Text.fromString
-    |> Text.height 30
-    |> Text.monospace
-    |> Text.color color
-    |> leftAligned
+scoreText color =
+  Text.fromString
+    >> Text.height 30
+    >> Text.monospace
+    >> Text.color color
+    >> leftAligned
+
+playerTypeText : Color -> String -> Element
+playerTypeText color =
+  Text.fromString
+    >> Text.height 10
+    >> Text.monospace
+    >> Text.bold
+    >> Text.color color
+    >> centered
 
 scoreColor : Int -> Int -> Color
 scoreColor myScore theirScore = 
@@ -337,21 +367,44 @@ paddleScore : Paddle -> Color -> Element
 paddleScore paddle color = 
   scoreText color ( paddle.name ++ ": " ++ toString paddle.score)
 
+playerType : Paddle -> Element
+playerType paddle =
+  (playerTypeText green <| case paddle.controlledBy of
+    MouseControls -> "Mouse"
+    ArrowControls -> "Keyboard arrows"
+    WasdControls -> "Keyboard wasd"
+    Computer -> "Computer")
+
+clickable : Action -> Element -> Element
+clickable action element = 
+  Graphics.Input.clickable (Signal.message mailbox.address action) element
+
 score : Model -> Element
 score model = 
-  let canvasWidth = floor model.canvas.width
+  let canvasWidth = model.canvas.width
+      scoreHeight = model.scoreHeight
       leftColor = scoreColor model.leftPaddle.score model.rightPaddle.score
       rightColor = scoreColor model.rightPaddle.score model.leftPaddle.score
-  in flow down 
-    [ spacer canvasWidth 1
-    , flow right 
-      [ paddleScore model.leftPaddle leftColor
-      , spacer 100 1
-      , paddleScore model.rightPaddle rightColor
+      scoreContainer = container (canvasWidth//2) (scoreHeight//2+10)  midBottom
+      playerTypeContainer = container (canvasWidth//2) (scoreHeight//2-10) midTop
+  in flow right 
+      [ flow down 
+        [ paddleScore model.leftPaddle leftColor
+            |> scoreContainer
+        , playerType model.leftPaddle
+            |> playerTypeContainer
+        ]
+         |> clickable ClickedOnLeftPlayer
+      , flow down 
+        [ paddleScore model.rightPaddle rightColor
+            |> scoreContainer
+        , playerType model.rightPaddle
+            |> playerTypeContainer
+        ]
+         |> clickable ClickedOnRightPlayer
       ]
-        |> container canvasWidth 100 middle
-        |> color black
-    ]
+     |> container canvasWidth scoreHeight middle
+     |> color black
 
 view : Model -> Element
 view model = 
@@ -359,13 +412,19 @@ view model =
     [ canvas model.canvas
         [ paddle model.leftPaddle
         , paddle model.rightPaddle
-        , shadowBall model.ball
+        , shadowBall model.ball -- gray previous position of ball to see movement when paused.
         , ball model.ball
         ]
+    , spacer model.canvas.width 1
     , score model
     ]
 
 ----- Wiring -----
+-- Mailbox for click event
+mailbox : Signal.Mailbox Action
+mailbox = Signal.mailbox NoOp
+
+-- Merge before folding, to always get previous state.
 mergeSignals : Signal Action
 mergeSignals =
   Signal.mergeMany 
@@ -375,9 +434,10 @@ mergeSignals =
   , Signal.map SpacePressed Keyboard.space
   , Signal.map (always MouseClick) Mouse.clicks
   , Signal.map Tick (Time.fps 100)
+  , Signal.map identity mailbox.signal
   ]
 
-
+-- Update the model
 model : Signal Model
 model = Signal.foldp update model0 mergeSignals
 
