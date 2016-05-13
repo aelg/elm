@@ -406,6 +406,24 @@ score model =
      |> container canvasWidth scoreHeight middle
      |> color black
 
+pauseMessageText : String -> Element
+pauseMessageText =
+  Text.fromString
+    >> Text.height 12
+    >> Text.monospace
+    >> Text.color white
+    >> centered
+
+pauseMessage : Model -> Form
+pauseMessage model =
+    toForm
+    <| if model.state == Paused then
+       flow down
+       [ pauseMessageText "Space or click to pause/unpause."
+       , pauseMessageText "Click on scoreboard to change controls."
+       ]
+       else empty
+
 view : Model -> Element
 view model =
   flow down
@@ -414,6 +432,7 @@ view model =
         , paddle model.rightPaddle
         , shadowBall model.ball -- gray previous position of ball to see movement when paused.
         , ball model.ball
+        , pauseMessage model
         ]
     , spacer model.canvas.width 1
     , score model
