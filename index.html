@@ -7350,7 +7350,9 @@ Elm.Main.make = function (_elm) {
          {case "MouseControls": return "Mouse";
             case "ArrowControls": return "Keyboard arrows";
             case "WasdControls": return "Keyboard wasd";
-            default: return "Computer";}
+            case "EasyComputer": return "Computer - Easy";
+            case "HardComputer": return "Computer - Hard";
+            default: return "Computer - Insane";}
       }());
    };
    var scoreText = function (color) {
@@ -7384,13 +7386,14 @@ Elm.Main.make = function (_elm) {
       {ball: _U.update(ball,{v: {ctor: "_Tuple2",_0: vx + model.speedIncrease * (vx / $Basics.abs(vx)) * $Time.inSeconds(timeDiff),_1: vy}})});
    });
    var changeY = F3(function (model,paddle,ball) {
+      var abssq = function (x) {    return x * $Basics.abs(x);};
       var _p6 = ball.v;
       var vx = _p6._0;
       var vy = _p6._1;
       var _p7 = ball.p;
       var y = _p7._1;
-      var offset = paddle.y - y;
-      return _U.update(ball,{v: {ctor: "_Tuple2",_0: vx,_1: vy - offset}});
+      var offset = (paddle.y - y) * 0.2;
+      return _U.update(ball,{v: {ctor: "_Tuple2",_0: vx,_1: vy - abssq(offset)}});
    });
    var shouldBouncePaddle = F3(function (model,paddle,ball) {
       var paddleBottom = paddle.y - paddle.height / 2;
@@ -7435,53 +7438,96 @@ Elm.Main.make = function (_elm) {
       var maxPos = A2(paddleMaxPos,canvas,paddle);
       return _U.update(paddle,{y: A3($Basics.clamp,0 - maxPos,maxPos,newY)});
    });
-   var moveAI = F3(function (timeDiff,model,paddle) {
-      var aiPos = paddle.y;
-      var _p23 = model.ball.p;
-      var y = _p23._1;
-      var diff = $Basics.abs(aiPos - y);
-      var direction = _U.cmp(aiPos,y) > 0 ? -1 : 1;
-      return _U.cmp(diff,1) > -1 ? A3(updatePaddlePos,
-      model.canvas,
-      aiPos + A2($Basics.min,diff,paddle.speed * $Time.inSeconds(timeDiff)) * direction,
-      paddle) : paddle;
-   });
-   var movePaddleKeyboard = F4(function (model,timeDiff,direction,paddle) {
-      var newPos = paddle.y + paddle.speed * $Time.inSeconds(timeDiff) * $Basics.toFloat(direction);
+   var movePaddle = F4(function (timeDiff,model,newY,paddle) {
+      var maxDiff = paddle.speed * $Time.inSeconds(timeDiff);
+      var diff = newY - paddle.y;
+      var restrictedDiff = A3($Basics.clamp,0 - maxDiff,maxDiff,diff);
+      var newPos = paddle.y + restrictedDiff;
       return A3(updatePaddlePos,model.canvas,newPos,paddle);
    });
-   var movePaddle = F3(function (timeDiff,model,paddle) {
-      var _p24 = paddle.controlledBy;
-      switch (_p24.ctor)
-      {case "Computer": return A3(moveAI,timeDiff,model,paddle);
-         case "MouseControls": return A3(updatePaddlePos,model.canvas,model.mouseY,paddle);
-         case "ArrowControls": return A4(movePaddleKeyboard,model,timeDiff,model.arrowDirection,paddle);
-         default: return A4(movePaddleKeyboard,model,timeDiff,model.wasdDirection,paddle);}
+   var moveInsaneAI = F3(function (timeDiff,model,paddle) {
+      var sizeOffset = model.ball.size + paddle.width / 2;
+      var clampFold = F3(function (ma,mi,n) {
+         clampFold: while (true) if (_U.cmp(n,ma) > 0) {
+               var _v5 = ma,_v6 = mi,_v7 = ma - (n - ma);
+               ma = _v5;
+               mi = _v6;
+               n = _v7;
+               continue clampFold;
+            } else if (_U.cmp(n,mi) < 0) {
+                  var _v8 = ma,_v9 = mi,_v10 = mi + (mi - n);
+                  ma = _v8;
+                  mi = _v9;
+                  n = _v10;
+                  continue clampFold;
+               } else return n;
+      });
+      var magnitude = F2(function (x,y) {    return $Basics.sqrt(x * x + y * y);});
+      var _p23 = model.ball.v;
+      var ballvx = _p23._0;
+      var ballvy = _p23._1;
+      var speedUpOffset = _U.cmp(ballvy,0) < 0 ? paddle.height / 4 : (0 - paddle.height) / 4;
+      var dY = ballvy / $Basics.abs(ballvx);
+      var maxY = getMaxY(model.canvas) - model.ball.size + ballvy / 2 * $Time.inSeconds(timeDiff);
+      var _p24 = model.ball.p;
+      var ballx = _p24._0;
+      var bally = _p24._1;
+      var toward = _U.cmp(ballx,paddle.x) < 0 && _U.cmp(ballvx,0) > 0 || _U.cmp(ballx,paddle.x) > 0 && _U.cmp(ballvx,0) < 0;
+      var deltaX = toward ? $Basics.abs(ballx - paddle.x) - sizeOffset : 2 * $Basics.abs(model.leftPaddle.x - model.rightPaddle.x) - $Basics.abs(ballx - paddle.x);
+      var hitPos = A3(clampFold,maxY,0 - maxY,dY * deltaX + bally + speedUpOffset);
+      return A4(movePaddle,timeDiff,model,hitPos,paddle);
    });
-   var movePaddles = F2(function (timeDiff,model) {
-      return _U.update(model,{leftPaddle: A3(movePaddle,timeDiff,model,model.leftPaddle),rightPaddle: A3(movePaddle,timeDiff,model,model.rightPaddle)});
+   var moveAI = F4(function (timeDiff,model,easy,paddle) {
+      var _p25 = model.ball.v;
+      var ballvx = _p25._0;
+      var ballvy = _p25._1;
+      var restPos = _U.cmp(ballvy,0) > 0 ? getMaxY(model.canvas) / 2 : 0 - getMaxY(model.canvas) / 2;
+      var _p26 = model.ball.p;
+      var ballx = _p26._0;
+      var bally = _p26._1;
+      var toward = _U.cmp(ballx,paddle.x) < 0 && _U.cmp(ballvx,0) > 0 || _U.cmp(ballx,paddle.x) > 0 && _U.cmp(ballvx,0) < 0;
+      var speedUpPos = _U.cmp(ballvy,0) < 0 ? bally - paddle.height / 4 : bally + paddle.height / 4;
+      var targetPos = easy ? bally : speedUpPos;
+      return toward ? A4(movePaddle,timeDiff,model,targetPos,paddle) : A4(movePaddle,timeDiff,model,restPos,paddle);
    });
    var shouldBounceY = F2(function (model,ball) {
-      var _p25 = ball.v;
-      var vy = _p25._1;
-      var _p26 = ball.p;
-      var y = _p26._1;
+      var _p27 = ball.v;
+      var vy = _p27._1;
+      var _p28 = ball.p;
+      var y = _p28._1;
       return _U.cmp(vy,0) < 0 && _U.cmp(y,0 - (getMaxY(model.canvas) - ball.size)) < 0 || _U.cmp(vy,0) > 0 && _U.cmp(y,getMaxY(model.canvas) - ball.size) > 0;
    });
    var bounceWalls = F2(function (model,ball) {    return A2(shouldBounceY,model,ball) ? bounceY(ball) : ball;});
    var ballCollision = function (model) {
       return _U.update(model,{ball: A2(bounceWalls,model,A3(bouncePaddle,model,model.rightPaddle,A3(bouncePaddle,model,model.leftPaddle,model.ball)))});
    };
-   var absoluteToCanvasRelative = F2(function (canvas,_p27) {
-      var _p28 = _p27;
-      var _p29 = getBorders(canvas);
-      var maxX = _p29._0;
-      var maxY = _p29._1;
-      return {ctor: "_Tuple2",_0: $Basics.toFloat(_p28._0) - maxX,_1: 0 - ($Basics.toFloat(_p28._1) - maxY)};
+   var movePaddleKeyboard = F4(function (model,timeDiff,direction,paddle) {
+      var newPos = $Basics.toFloat(direction) * getMaxY(model.canvas);
+      return !_U.eq(direction,0) ? A4(movePaddle,timeDiff,model,newPos,paddle) : paddle;
+   });
+   var tickPaddle = F3(function (timeDiff,model,paddle) {
+      var _p29 = paddle.controlledBy;
+      switch (_p29.ctor)
+      {case "EasyComputer": return A4(moveAI,timeDiff,model,true,paddle);
+         case "HardComputer": return A4(moveAI,timeDiff,model,false,paddle);
+         case "InsaneComputer": return A3(moveInsaneAI,timeDiff,model,paddle);
+         case "MouseControls": return A4(movePaddle,timeDiff,model,model.mouseY,paddle);
+         case "ArrowControls": return A4(movePaddleKeyboard,model,timeDiff,model.arrowDirection,paddle);
+         default: return A4(movePaddleKeyboard,model,timeDiff,model.wasdDirection,paddle);}
+   });
+   var tickPaddles = F2(function (timeDiff,model) {
+      return _U.update(model,{leftPaddle: A3(tickPaddle,timeDiff,model,model.leftPaddle),rightPaddle: A3(tickPaddle,timeDiff,model,model.rightPaddle)});
+   });
+   var absoluteToCanvasRelative = F2(function (canvas,_p30) {
+      var _p31 = _p30;
+      var _p32 = getBorders(canvas);
+      var maxX = _p32._0;
+      var maxY = _p32._1;
+      return {ctor: "_Tuple2",_0: $Basics.toFloat(_p31._0) - maxX,_1: 0 - ($Basics.toFloat(_p31._1) - maxY)};
    });
    var onMouseMove = F2(function (model,pos) {
-      var _p30 = A2(absoluteToCanvasRelative,model.canvas,pos);
-      var y = _p30._1;
+      var _p33 = A2(absoluteToCanvasRelative,model.canvas,pos);
+      var y = _p33._1;
       return _U.update(model,{mouseY: y});
    });
    var ClickedOnRightPlayer = {ctor: "ClickedOnRightPlayer"};
@@ -7561,18 +7607,22 @@ Elm.Main.make = function (_elm) {
          };
       };
    };
-   var Computer = {ctor: "Computer"};
+   var InsaneComputer = {ctor: "InsaneComputer"};
+   var HardComputer = {ctor: "HardComputer"};
+   var EasyComputer = {ctor: "EasyComputer"};
    var WasdControls = {ctor: "WasdControls"};
    var ArrowControls = {ctor: "ArrowControls"};
    var MouseControls = {ctor: "MouseControls"};
    var cyclePlayerType = function (paddle) {
       return _U.update(paddle,
       {controlledBy: function () {
-         var _p31 = paddle.controlledBy;
-         switch (_p31.ctor)
+         var _p34 = paddle.controlledBy;
+         switch (_p34.ctor)
          {case "MouseControls": return ArrowControls;
             case "ArrowControls": return WasdControls;
-            case "WasdControls": return Computer;
+            case "WasdControls": return EasyComputer;
+            case "EasyComputer": return HardComputer;
+            case "HardComputer": return InsaneComputer;
             default: return MouseControls;}
       }()});
    };
@@ -7601,10 +7651,10 @@ Elm.Main.make = function (_elm) {
    var model0 = {canvas: A3(Canvas,800,500,$Color.black)
                 ,scoreHeight: 100
                 ,leftPaddle: A9(Paddle,"Left Player",10,100,-360,0,0,$Color.white,WasdControls,200)
-                ,rightPaddle: A9(Paddle,"Right Player",10,100,360,0,0,$Color.white,ArrowControls,200)
+                ,rightPaddle: A9(Paddle,"Right Player",10,100,360,0,0,$Color.white,EasyComputer,200)
                 ,ball: A5(Ball,{ctor: "_Tuple2",_0: 320,_1: 0},{ctor: "_Tuple2",_0: -400,_1: 100},10,$Color.white,{ctor: "_Tuple2",_0: 320,_1: 0})
                 ,score: {ctor: "_Tuple2",_0: 0,_1: 0}
-                ,speedIncrease: 10
+                ,speedIncrease: 2
                 ,state: Paused
                 ,mouseY: 0
                 ,arrowDirection: 0
@@ -7612,25 +7662,25 @@ Elm.Main.make = function (_elm) {
    var gameLost = function (model) {
       var rightPaddle = model.rightPaddle;
       var leftPaddle = model.leftPaddle;
-      var _p32 = model.ball.p;
-      var x = _p32._0;
+      var _p35 = model.ball.p;
+      var x = _p35._0;
       return _U.cmp(x,0 - getMaxX(model.canvas)) < 0 ? _U.update(model,
       {rightPaddle: _U.update(rightPaddle,{score: rightPaddle.score + 1}),ball: model0.ball}) : _U.cmp(x,getMaxX(model.canvas)) > 0 ? _U.update(model,
       {leftPaddle: _U.update(leftPaddle,{score: leftPaddle.score + 1}),ball: model0.ball}) : model;
    };
    var onTick = F2(function (timeDiff,model) {
-      return _U.eq(model.state,Running) ? gameLost(A2(increaseSpeed,timeDiff,ballCollision(A2(movePaddles,timeDiff,A2(moveBall,timeDiff,model))))) : model;
+      return _U.eq(model.state,Running) ? gameLost(A2(increaseSpeed,timeDiff,ballCollision(A2(tickPaddles,timeDiff,A2(moveBall,timeDiff,model))))) : model;
    });
    var update = F2(function (action,model) {
-      var _p33 = action;
-      switch (_p33.ctor)
+      var _p36 = action;
+      switch (_p36.ctor)
       {case "NoOp": return model;
-         case "MouseMove": return A2(onMouseMove,model,_p33._0);
+         case "MouseMove": return A2(onMouseMove,model,_p36._0);
          case "MouseClick": return A2(toggleState,true,model);
-         case "ArrowPressed": return A2(onArrowPressed,model,_p33._0);
-         case "WasdPressed": return A2(onWasdPressed,model,_p33._0);
-         case "SpacePressed": return A2(toggleState,_p33._0,model);
-         case "Tick": return A2(onTick,_p33._0,model);
+         case "ArrowPressed": return A2(onArrowPressed,model,_p36._0);
+         case "WasdPressed": return A2(onWasdPressed,model,_p36._0);
+         case "SpacePressed": return A2(toggleState,_p36._0,model);
+         case "Tick": return A2(onTick,_p36._0,model);
          case "ClickedOnLeftPlayer": return onLeftPlayerClick(model);
          default: return onRightPlayerClick(model);}
    });
@@ -7647,7 +7697,9 @@ Elm.Main.make = function (_elm) {
                              ,MouseControls: MouseControls
                              ,ArrowControls: ArrowControls
                              ,WasdControls: WasdControls
-                             ,Computer: Computer
+                             ,EasyComputer: EasyComputer
+                             ,HardComputer: HardComputer
+                             ,InsaneComputer: InsaneComputer
                              ,Model: Model
                              ,model0: model0
                              ,NoOp: NoOp
@@ -7665,9 +7717,11 @@ Elm.Main.make = function (_elm) {
                              ,absoluteToCanvasRelative: absoluteToCanvasRelative
                              ,paddleMaxPos: paddleMaxPos
                              ,updatePaddlePos: updatePaddlePos
+                             ,movePaddle: movePaddle
                              ,onMouseMove: onMouseMove
                              ,onArrowPressed: onArrowPressed
                              ,onWasdPressed: onWasdPressed
+                             ,moveInsaneAI: moveInsaneAI
                              ,moveAI: moveAI
                              ,moveBall: moveBall
                              ,bounceX: bounceX
@@ -7681,8 +7735,8 @@ Elm.Main.make = function (_elm) {
                              ,gameLost: gameLost
                              ,increaseSpeed: increaseSpeed
                              ,movePaddleKeyboard: movePaddleKeyboard
-                             ,movePaddle: movePaddle
-                             ,movePaddles: movePaddles
+                             ,tickPaddle: tickPaddle
+                             ,tickPaddles: tickPaddles
                              ,onTick: onTick
                              ,toggleState: toggleState
                              ,cyclePlayerType: cyclePlayerType
