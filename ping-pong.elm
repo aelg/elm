@@ -1,5 +1,6 @@
 import Html
 import Html.App
+import Html.Lazy
 import Collage exposing (..)
 import Element exposing (..)
 import Color exposing (..)
@@ -347,9 +348,9 @@ changeRightPlayer model =
   { model | rightPaddle = cyclePlayerType model.rightPaddle }
 
 --- Update ---
-update : Msg -> Model -> (Model, Cmd Msg)
-update action model =
-  (case action of
+update : Msg -> Model -> Model
+update msg model =
+  case msg of
     NoOp -> model
     MouseMove pos -> onMouseMove model pos
     ArrowPressed dir -> onArrowPressed model dir
@@ -358,7 +359,6 @@ update action model =
     Tick time -> onTick time model
     ChangeLeftPlayer -> changeLeftPlayer model
     ChangeRightPlayer -> changeRightPlayer model
-  , Cmd.none)
 
 ---- Keyboard handling -----
 upArrow : Keyboard.KeyCode
@@ -528,18 +528,24 @@ view model =
 
 subscriptions : Model -> Sub Msg
 subscriptions model =
-  Platform.Sub.batch
-  [ Keyboard.downs (keyDown model)
-  , Keyboard.ups (keyUp model)
-  , AnimationFrame.diffs Tick
-  , Mouse.moves (\{x,y} -> MouseMove (x,y))
-  ]
+  if model.state == Running then
+    Platform.Sub.batch
+    [ Keyboard.downs (keyDown model)
+    , Keyboard.ups (keyUp model)
+    , AnimationFrame.diffs Tick
+    , Mouse.moves (\{x,y} -> MouseMove (x,y))
+    ]
+    else
+    Platform.Sub.batch
+    [ Keyboard.downs (keyDown model)
+    , Keyboard.ups (keyUp model)
+    ]
+
 
 main : Program Never
 main = Html.App.program
-  {
-    init = (model0, Cmd.none),
-    update = update,
-    subscriptions = subscriptions,
-    view = view
+  { init = (model0, Cmd.none)
+  , update = (\msg model -> (update msg model, Cmd.none))
+  , subscriptions = subscriptions
+  , view = Html.Lazy.lazy view
   }
