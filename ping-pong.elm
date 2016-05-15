@@ -1,12 +1,15 @@
-import Graphics.Collage exposing (..)
-import Graphics.Element exposing (..)
-import Graphics.Input
-import Signal
+import Html
+import Html.App
+import Collage exposing (..)
+import Element exposing (..)
 import Color exposing (..)
-import Mouse
-import Keyboard
 import Time
 import Text
+import Mouse
+import Keyboard
+import AnimationFrame
+import Platform.Sub
+import Char
 
 ----- Model -----
 type alias Pos =
@@ -80,17 +83,16 @@ model0 =
   , wasdDirection = 0
   }
 
------ Actions -----
-type Action =
+----- Msgs -----
+type Msg =
   NoOp
   | MouseMove (Int, Int)
-  | MouseClick
   | Tick Time.Time
-  | ArrowPressed {x:Int, y:Int}
-  | WasdPressed {x:Int, y:Int}
+  | ArrowPressed Int
+  | WasdPressed Int
   | SpacePressed Bool
-  | ClickedOnLeftPlayer
-  | ClickedOnRightPlayer
+  | ChangeLeftPlayer
+  | ChangeRightPlayer
 
 clampFold mi ma n = if n > ma then
                        clampFold mi ma (ma - (n - ma)) else
@@ -134,12 +136,12 @@ onMouseMove model pos =
   let (_,y) = absoluteToCanvasRelative model.canvas pos
   in { model | mouseY = y }
 
-onArrowPressed : Model -> {x : Int, y : Int} -> Model
-onArrowPressed model {y} =
+onArrowPressed : Model -> Int -> Model
+onArrowPressed model y =
   { model | arrowDirection = y }
 
-onWasdPressed : Model -> {x : Int, y : Int} -> Model
-onWasdPressed model {y} =
+onWasdPressed : Model -> Int -> Model
+onWasdPressed model y =
   { model | wasdDirection = y }
 
 --- AI movement ---
@@ -341,27 +343,69 @@ cyclePlayerType paddle =
       InsaneComputer -> MouseControls
   }
 
-onLeftPlayerClick : Model -> Model
-onLeftPlayerClick model =
+changeLeftPlayer : Model -> Model
+changeLeftPlayer model =
   { model | leftPaddle = cyclePlayerType model.leftPaddle}
 
-onRightPlayerClick : Model -> Model
-onRightPlayerClick model =
+changeRightPlayer : Model -> Model
+changeRightPlayer model =
   { model | rightPaddle = cyclePlayerType model.rightPaddle }
 
 --- Update ---
-update : Action -> Model -> Model
+update : Msg -> Model -> (Model, Cmd Msg)
 update action model =
-  case action of
+  (case action of
     NoOp -> model
     MouseMove pos -> onMouseMove model pos
-    MouseClick -> toggleState True model
     ArrowPressed dir -> onArrowPressed model dir
     WasdPressed dir -> onWasdPressed model dir
     SpacePressed pressed -> toggleState pressed model
     Tick time -> onTick time model
-    ClickedOnLeftPlayer -> onLeftPlayerClick model
-    ClickedOnRightPlayer -> onRightPlayerClick model
+    ChangeLeftPlayer -> changeLeftPlayer model
+    ChangeRightPlayer -> changeRightPlayer model
+  , Cmd.none)
+
+---- Keyboard handling -----
+upArrow : Keyboard.KeyCode
+upArrow = 38
+downArrow : Keyboard.KeyCode
+downArrow = 40
+leftArrow : Keyboard.KeyCode
+leftArrow = 37
+rightArrow : Keyboard.KeyCode
+rightArrow = 39
+
+keyDown : Model -> Keyboard.KeyCode -> Msg
+keyDown model code =
+  if code == Char.toCode ' ' then
+     SpacePressed True else
+  if code == Char.toCode 'W' then
+     WasdPressed 1 else
+  if code == Char.toCode 'S' then
+     WasdPressed -1 else
+  if code == upArrow then
+     ArrowPressed 1 else
+  if code == downArrow then
+     ArrowPressed -1 else
+  if code == leftArrow then
+     ChangeLeftPlayer else
+  if code == rightArrow then
+     ChangeRightPlayer else
+     NoOp
+
+keyUp : Model -> Keyboard.KeyCode -> Msg
+keyUp model code =
+  if code == Char.toCode ' ' then
+     SpacePressed False else
+  if code == Char.toCode 'W' && model.wasdDirection == 1 then
+     WasdPressed 0 else
+  if code == Char.toCode 'S' && model.wasdDirection == -1 then
+     WasdPressed 0 else
+  if code == upArrow && model.arrowDirection == 1 then
+     ArrowPressed 0 else
+  if code == downArrow && model.arrowDirection == -1 then
+     ArrowPressed 0 else
+     NoOp
 
 ----- View -----
 paddle : Paddle -> Form
@@ -426,10 +470,6 @@ playerType paddle =
     HardComputer -> "Computer - Hard"
     InsaneComputer -> "Computer - Insane"
 
-clickable : Action -> Element -> Element
-clickable action element =
-  Graphics.Input.clickable (Signal.message mailbox.address action) element
-
 score : Model -> Element
 score model =
   let canvasWidth = model.canvas.width
@@ -445,14 +485,12 @@ score model =
         , playerType model.leftPaddle
             |> playerTypeContainer
         ]
-         |> clickable ClickedOnLeftPlayer
       , flow down
         [ paddleScore model.rightPaddle rightColor
             |> scoreContainer
         , playerType model.rightPaddle
             |> playerTypeContainer
         ]
-         |> clickable ClickedOnRightPlayer
       ]
      |> container canvasWidth scoreHeight middle
      |> color black
@@ -470,14 +508,14 @@ pauseMessage model =
     toForm
     <| if model.state == Paused then
        flow down
-       [ pauseMessageText "Space or click to pause/unpause."
-       , pauseMessageText "Click on scoreboard to change controls."
+       [ pauseMessageText "Space to pause/unpause."
+       , pauseMessageText "Left/Right arrow to change controls."
        ]
        else empty
 
-view : Model -> Element
+view : Model -> Html.Html Msg
 view model =
-  flow down
+  toHtml <| flow down
     [ canvas model.canvas
         [ paddle model.leftPaddle
         , paddle model.rightPaddle
@@ -489,28 +527,24 @@ view model =
     , score model
     ]
 
------ Wiring -----
--- Mailbox for click event
-mailbox : Signal.Mailbox Action
-mailbox = Signal.mailbox NoOp
 
--- Merge before folding, to always get previous state.
-mergeSignals : Signal Action
-mergeSignals =
-  Signal.mergeMany
-  [ Signal.map MouseMove Mouse.position
-  , Signal.map ArrowPressed Keyboard.arrows
-  , Signal.map WasdPressed Keyboard.wasd
-  , Signal.map SpacePressed Keyboard.space
-  , Signal.map (always MouseClick) Mouse.clicks
-  , Signal.map Tick (Time.fps 100)
-  , Signal.map identity mailbox.signal
+
+----- Subscriptions -----
+
+subscriptions : Model -> Sub Msg
+subscriptions model =
+  Platform.Sub.batch
+  [ Keyboard.downs (keyDown model)
+  , Keyboard.ups (keyUp model)
+  , AnimationFrame.diffs Tick
+  , Mouse.moves (\{x,y} -> MouseMove (x,y))
   ]
 
--- Update the model
-model : Signal Model
-model = Signal.foldp update model0 mergeSignals
-
-main : Signal Element
-main = Signal.map view model
-
+main : Program Never
+main = Html.App.program
+  {
+    init = (model0, Cmd.none),
+    update = update,
+    subscriptions = subscriptions,
+    view = view
+  }
