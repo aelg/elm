@@ -12,17 +12,15 @@ import Platform.Sub
 import Char
 
 ----- Model -----
-type alias Pos =
+type alias Ball =
   { x : Float
   , y : Float
-  }
-
-type alias Ball =
-  { p : (Float, Float)
-  , v : (Float, Float)
+  , vx : Float
+  , vy : Float
+  , lastx : Float
+  , lasty : Float
   , size : Float
   , color : Color
-  , lastP : (Float, Float)
   }
 
 type alias Paddle =
@@ -74,7 +72,7 @@ model0 =
   , scoreHeight = 100
   , leftPaddle = Paddle "Left Player" 10 100 -360 0 0 white WasdControls 200
   , rightPaddle = Paddle "Right Player" 10 100 360 0 0 white EasyComputer 200
-  , ball = Ball (320,0) (-400,100) 10 white (320, 0)
+  , ball = Ball 320 0 -400 100 320 0 10 white
   , score = (0, 0)
   , speedIncrease = 10
   , state = Paused
@@ -94,6 +92,8 @@ type Msg =
   | ChangeLeftPlayer
   | ChangeRightPlayer
 
+--- Utils ---
+-- For calculating where the ball is after it bounces.
 clampFold mi ma n = if n > ma then
                        clampFold mi ma (ma - (n - ma)) else
                     if n < mi then
@@ -114,23 +114,16 @@ absoluteToCanvasRelative canvas (x, y) =
   in (toFloat x - maxX, -(toFloat y - maxY))
 
 --- Paddle movement ---
-paddleMaxPos : Canvas -> Paddle -> Float
-paddleMaxPos canvas paddle =
-  getMaxY canvas - paddle.height/2
-
-updatePaddlePos : Canvas -> Float -> Paddle -> Paddle
-updatePaddlePos canvas newY paddle =
-  let maxPos = paddleMaxPos canvas paddle
-  in {paddle | y = clamp (-maxPos) maxPos newY}
-
 movePaddle : Time.Time -> Model -> Float -> Paddle -> Paddle
-movePaddle timeDiff model newY paddle =
-  let diff = newY - paddle.y
+movePaddle timeDiff model wantedY paddle =
+  let diff = wantedY - paddle.y
       maxDiff = paddle.speed * Time.inSeconds timeDiff
       restrictedDiff = clamp (-maxDiff) maxDiff diff
-      newPos = paddle.y + restrictedDiff
-  in updatePaddlePos model.canvas newPos paddle
+      newY = paddle.y + restrictedDiff
+      maxY = getMaxY model.canvas - paddle.height/2
+  in { paddle | y = clampFold -maxY maxY newY }
 
+--- Input Handling ---
 onMouseMove : Model -> (Int, Int) -> Model
 onMouseMove model pos =
   let (_,y) = absoluteToCanvasRelative model.canvas pos
@@ -144,111 +137,110 @@ onWasdPressed : Model -> Int -> Model
 onWasdPressed model y =
   { model | wasdDirection = y }
 
---- AI movement ---
-moveInsaneAI : Time.Time -> Model -> Float -> Paddle -> Paddle
-moveInsaneAI timeDiff model aggressiveness paddle =
-  let (ballx,bally) = model.ball.p
-      (ballvx, ballvy) = model.ball.v
-      magnitude x y = sqrt (x * x + y * y)
-      toward = ballx < paddle.x && ballvx > 0 || ballx > paddle.x && ballvx < 0
-      speedUpOffset = if ballvy < 0 then
-                         (paddle.height/2) * aggressiveness else
-                         -(paddle.height/2) * aggressiveness
-      dY = ballvy / abs ballvx
-      sizeOffset = model.ball.size + paddle.width/2
-      deltaX = if toward then
-                  abs (ballx - paddle.x) - sizeOffset else
-                  2*(abs (model.leftPaddle.x - model.rightPaddle.x) - sizeOffset) - abs (ballx - paddle.x)
-      maxY = getMaxY model.canvas - model.ball.size
-      hitPos = clampFold -maxY maxY (dY * deltaX + bally + speedUpOffset)
-  in movePaddle timeDiff model hitPos paddle
+--- Computer movement ---
 
-moveAI : Time.Time -> Model -> Float -> Paddle -> Paddle
-moveAI timeDiff model aggressiveness paddle =
-  let (ballx,bally) = model.ball.p
-      (ballvx, ballvy) = model.ball.v
-      toward = ballx < paddle.x && ballvx > 0 || ballx > paddle.x && ballvx < 0
-      speedUpOffset = if ballvy < 0 then
-                      (paddle.height/2) * aggressiveness else
-                      -(paddle.height/2) * aggressiveness
-      restPos = if ballvy > 0 then
+getAggressivenessOffset ball paddle aggressiveness =
+  if ball.vy < 0 then
+     (paddle.height/2) * aggressiveness else
+    -(paddle.height/2) * aggressiveness
+
+type alias ComputerAlgorithm = Model -> Paddle -> Float
+insaneComputer : Float -> Model -> Paddle -> Float
+insaneComputer aggressiveness model paddle =
+  let ball = model.ball
+      toward = ball.x < paddle.x && ball.vx > 0 || ball.x > paddle.x && ball.vx < 0
+      aggressivenessOffset = getAggressivenessOffset ball paddle aggressiveness
+      sizeOffset = model.ball.size + paddle.width/2
+      dY = ball.vy / abs ball.vx
+      paddleToBall = abs (ball.x - paddle.x) - sizeOffset
+      fieldWidth = (abs (model.leftPaddle.x - model.rightPaddle.x) - sizeOffset)
+      deltaX =
+        if toward then
+           paddleToBall else
+           2*fieldWidth - paddleToBall
+      maxY = getMaxY model.canvas - model.ball.size
+  in clampFold -maxY maxY (dY * deltaX + ball.y + aggressivenessOffset)
+
+normalComputer : Float -> Model -> Paddle -> Float
+normalComputer aggressiveness model paddle =
+  let ball = model.ball
+      toward = ball.x < paddle.x && ball.vx > 0 || ball.x > paddle.x && ball.vx < 0
+      aggressivenessOffset = getAggressivenessOffset ball paddle aggressiveness
+      restPos = if ball.vy > 0 then
                    getMaxY model.canvas/2 else
                    -(getMaxY model.canvas/2)
-      targetPos = bally + speedUpOffset
-  in if toward then movePaddle timeDiff model targetPos paddle
-     else movePaddle timeDiff model restPos paddle
+  in if toward then
+        ball.y + aggressivenessOffset else
+        restPos
+
+moveComputer : Time.Time -> Model -> ComputerAlgorithm -> Paddle -> Paddle
+moveComputer timeDiff model ai paddle =
+  let aiPos = ai model paddle
+  in movePaddle timeDiff model aiPos paddle
 
 --- Ball movement ---
 moveBall : Time.Time -> Model -> Model
 moveBall timeDiff model =
   let ball = model.ball
-      (x,y) = ball.p
-      (vx,vy) = ball.v
-  in {model | ball = {ball | p =
-       ( x + vx * Time.inSeconds timeDiff
-       , y + vy * Time.inSeconds timeDiff
-       )
-     , lastP = ball.p
-     }}
+      ball' = { ball |
+                x = ball.x + ball.vx * Time.inSeconds timeDiff
+              , y = ball.y + ball.vy * Time.inSeconds timeDiff
+              , lastx = ball.x
+              , lasty = ball.y
+              }
+  in { model | ball = ball' }
 
 bounceX : Ball -> Ball
 bounceX ball =
-  {ball | v = (\(a,b) -> (negate a, b)) ball.v}
+  { ball | vx = -ball.vx }
 
 bounceY : Canvas -> Ball -> Ball
 bounceY canvas ball =
   let maxY = getMaxY canvas - ball.size
   in { ball |
-       v = (\(a,b) -> (a, negate b)) ball.v
-     , p = (\(a,b) -> (a, clampFold -maxY maxY b)) ball.p
+       vy = negate ball.vy
+     , y = clampFold -maxY maxY ball.y
   }
 
 shouldBouncePaddle : Model -> Paddle -> Ball -> Bool
 shouldBouncePaddle model paddle ball =
-  let (x,y) = ball.p
-      (lx,ly) = ball.lastP
-      (vx,_) = ball.v
-      paddleEdge = if vx > 0
+  let paddleEdge = if ball.vx > 0
         then paddle.x - paddle.width/2
         else paddle.x + paddle.width/2
-      ballEdgeOffset = if vx > 0
+      ballEdgeOffset = if ball.vx > 0
         then ball.size
         else -ball.size
+      ballEdge = ball.x + ballEdgeOffset
+      lastBallEdge = ball.lastx + ballEdgeOffset
       paddleTop = paddle.y + paddle.height/2
       paddleBottom = paddle.y - paddle.height/2
       isBetween a (x, y) = a >= x && a <= y || a >= y && a <= x
-  in ((x + ballEdgeOffset > paddleEdge && lx + ballEdgeOffset <= paddleEdge)
-      || (x + ballEdgeOffset < paddleEdge && lx + ballEdgeOffset >= paddleEdge))
-   && (y `isBetween` (paddleTop, paddleBottom)
-    || ly `isBetween` (paddleTop, paddleBottom)
-    || paddleTop `isBetween` (y, ly)
-    || paddleBottom `isBetween` (y, ly))
+  in paddleEdge `isBetween` (ballEdge, lastBallEdge) &&
+     ( ball.y `isBetween` (paddleTop, paddleBottom) ||
+       ball.lasty `isBetween` (paddleTop, paddleBottom) ||
+       paddleTop `isBetween` (ball.y, ball.lasty) ||
+       paddleBottom `isBetween` (ball.y, ball.lasty))
 
 shouldBounceY : Model -> Ball -> Bool
 shouldBounceY model ball =
-  let (_,y) = ball.p
-      (_,vy) = ball.v
-  in
-     vy < 0 && y < -(getMaxY model.canvas - ball.size)
-  || vy > 0 && y > getMaxY model.canvas - ball.size
+  ball.vy < 0 && ball.y < -(getMaxY model.canvas - ball.size) ||
+  ball.vy > 0 && ball.y > getMaxY model.canvas - ball.size
 
--- Adds vertical speed to the ball if it hits of center
-changeY : Model -> Paddle -> Ball -> Ball
-changeY model paddle ball =
-  let (_,y) = ball.p
-      (vx,vy) = ball.v
-      maxOffset = paddle.height/2
-      offset = clamp -maxOffset maxOffset (paddle.y - y)
+-- Calculates vertical speed change when the ball hits the paddle of center
+bounceSpeedChangeY : Paddle -> Ball -> Float
+bounceSpeedChangeY paddle ball =
+  let maxOffset = paddle.height/2
+      offset = clamp -maxOffset maxOffset (paddle.y - ball.y)
       abssq x = x* abs x
-  in { ball | v = (vx, vy - abssq (offset * 0.2)) }
+  in negate <| abssq (offset * 0.2)
 
 bouncePaddle : Model -> Paddle -> Ball -> Ball
 bouncePaddle model paddle ball =
   if shouldBouncePaddle model paddle ball then
+     let vx' = -ball.vx
+         vy' = ball.vy + bounceSpeedChangeY paddle ball
+     in { ball | vx = vx', vy = vy' } else
      ball
-       |> bounceX
-       |> changeY model paddle
-  else ball
 
 bounceWalls : Model -> Ball -> Ball
 bounceWalls model ball =
@@ -267,14 +259,14 @@ ballCollision model =
 
 gameLost : Model -> Model
 gameLost model =
-  let (x,_) = model.ball.p
+  let ball = model.ball
       leftPaddle = model.leftPaddle
       rightPaddle = model.rightPaddle
-  in if x < -(getMaxX model.canvas) then
+  in if ball.x < -(getMaxX model.canvas) then
         { model | rightPaddle = { rightPaddle | score = rightPaddle.score + 1 }
           , ball = model0.ball
         }
-     else if x > getMaxX model.canvas then
+     else if ball.x > getMaxX model.canvas then
         { model | leftPaddle = { leftPaddle | score = leftPaddle.score + 1 }
           , ball = model0.ball
         }
@@ -283,23 +275,25 @@ gameLost model =
 increaseSpeed : Time.Time -> Model -> Model
 increaseSpeed timeDiff model =
   let ball = model.ball
-      (vx,vy) = ball.v
+      vxSign = ball.vx/abs ball.vx
+      speedIncrease = model.speedIncrease * vxSign * Time.inSeconds timeDiff
   in { model | ball =
-       { ball | v =
-         (vx + model.speedIncrease * (vx/abs vx) * Time.inSeconds timeDiff, vy)}}
+       { ball | vx =
+         ball.vx + speedIncrease}}
 
 movePaddleKeyboard : Model -> Time.Time -> Int -> Paddle -> Paddle
 movePaddleKeyboard model timeDiff direction paddle =
   let newPos = toFloat direction * getMaxY model.canvas
-  in if direction /= 0 then movePaddle timeDiff model newPos paddle
-     else paddle
+  in if direction == 0 then
+        paddle else
+        movePaddle timeDiff model newPos paddle
 
 tickPaddle : Time.Time -> Model -> Paddle -> Paddle
 tickPaddle timeDiff model paddle =
   case paddle.controlledBy of
-    EasyComputer -> moveAI timeDiff model 0 paddle
-    HardComputer -> moveAI timeDiff model -0.5 paddle
-    InsaneComputer -> moveInsaneAI timeDiff model 0.8 paddle
+    EasyComputer -> moveComputer timeDiff model (normalComputer 0) paddle
+    HardComputer -> moveComputer timeDiff model (normalComputer -0.5) paddle
+    InsaneComputer -> moveComputer timeDiff model (insaneComputer 0.7) paddle
     MouseControls -> movePaddle timeDiff model model.mouseY paddle
     ArrowControls -> movePaddleKeyboard model timeDiff model.arrowDirection paddle
     WasdControls -> movePaddleKeyboard model timeDiff model.wasdDirection paddle
@@ -314,26 +308,27 @@ tickPaddles timeDiff model =
 onTick : Time.Time -> Model -> Model
 onTick timeDiff model =
   if model.state == Running then
-    model
-      |> moveBall timeDiff
-      |> tickPaddles timeDiff
-      |> ballCollision
-      |> increaseSpeed timeDiff
-      |> gameLost
+     model
+       |> moveBall timeDiff
+       |> tickPaddles timeDiff
+       |> ballCollision
+       |> increaseSpeed timeDiff
+       |> gameLost
   else model
 
 toggleState : Bool -> Model -> Model
 toggleState do model =
   if do then
-    if model.state == Running
-    then { model | state = Paused }
-    else { model | state = Running }
+     { model | state =
+       case model.state of
+         Running -> Paused
+         Paused  -> Running
+     }
   else model
 
 cyclePlayerType : Paddle -> Paddle
 cyclePlayerType paddle =
-  { paddle |
-    controlledBy =
+  { paddle | controlledBy =
     case paddle.controlledBy of
       MouseControls -> ArrowControls
       ArrowControls -> WasdControls
@@ -419,14 +414,14 @@ ball : Ball -> Form
 ball ball =
   circle ball.size
     |> filled ball.color
-    |> move ball.p
+    |> move (ball.x, ball.y)
 
 shadowBall : Ball -> Form
 shadowBall ball =
   circle ball.size
     |> filled ball.color
     |> alpha 0.5
-    |> move ball.lastP
+    |> move (ball.lastx, ball.lasty)
 
 canvas : Canvas -> List Form -> Element
 canvas canvas =
