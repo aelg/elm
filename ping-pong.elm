@@ -11,6 +11,7 @@ import Keyboard
 import AnimationFrame
 import Platform.Sub
 import Char
+import Random
 
 ----- Model -----
 type alias Ball =
@@ -67,19 +68,39 @@ type alias Model =
   , wasdDirection : Int
   }
 
+newBall =
+  { x = -320
+  , y = 0
+  , minVx = 300
+  , maxVx = 400
+  , maxVy = 200
+  }
+
 model0 : Model
 model0 =
   { canvas = Canvas 800 500 black
   , scoreHeight = 100
   , leftPaddle = Paddle "Left Player" 10 100 -360 0 0 white WasdControls 200
   , rightPaddle = Paddle "Right Player" 10 100 360 0 0 white EasyComputer 200
-  , ball = Ball 320 0 -400 100 320 0 10 white
+  , ball = ball0
   , score = (0, 0)
   , speedIncrease = 10
   , state = Paused
   , mouseY = 0
   , arrowDirection = 0
   , wasdDirection = 0
+  }
+
+ball0 : Ball
+ball0 =
+  { x = 0
+  , y = 0
+  , vx = 0
+  , vy = 0
+  , lastx = 0
+  , lasty = 0
+  , size = 10
+  , color = white
   }
 
 ----- Msgs -----
@@ -92,8 +113,20 @@ type Msg =
   | SpacePressed Bool
   | ChangeLeftPlayer
   | ChangeRightPlayer
+  | NewBall Ball
 
 --- Utils ---
+{--
+  Apply function on condition:
+  `cond ? func <| a` is the same as
+  if cond then
+     func a else
+     a
+--}
+(?) : Bool -> (a -> a) -> a -> a
+(?) doIt f = if doIt then f else identity
+infixl 1 ?
+
 -- For calculating where the ball is after it bounces.
 clampFold mi ma n = if n > ma then
                        clampFold mi ma (ma - (n - ma)) else
@@ -238,16 +271,15 @@ bounceSpeedChangeY paddle ball =
 bouncePaddle : Model -> Paddle -> Ball -> Ball
 bouncePaddle model paddle ball =
   if shouldBouncePaddle model paddle ball then
-     let vx' = -ball.vx
+     let x' = clampFold model.leftPaddle.x model.rightPaddle.x ball.x
+         vx' = -ball.vx
          vy' = ball.vy + bounceSpeedChangeY paddle ball
-     in { ball | vx = vx', vy = vy' } else
+     in { ball | x = x', vx = vx', vy = vy' } else
      ball
 
 bounceWalls : Model -> Ball -> Ball
 bounceWalls model ball =
-  if shouldBounceY model ball then
-     bounceY model.canvas ball else
-     ball
+  shouldBounceY model ball ? bounceY model.canvas <| ball
 
 ballCollision : Model -> Model
 ballCollision model =
@@ -258,20 +290,41 @@ ballCollision model =
       |> bounceWalls model
   }
 
-gameLost : Model -> Model
+makeNewBall : Cmd Msg
+makeNewBall =
+  let ball0 = model0.ball
+      x = newBall.x
+      y = newBall.y
+      vx = Random.float (newBall.minVx) (newBall.maxVx)
+      vy = Random.float -newBall.maxVy newBall.maxVy
+      shouldMirror = Random.bool
+      toBall (doMirror, (vx, vy)) =
+        doMirror ? mirror <| { ball0 | x = x, y = y
+                             , vx = vx, vy = vy
+                             , lastx = x, lasty = y
+                             }
+      mirror ball = { ball | x = -ball.x, vx = -ball.vx, lastx = -ball.lastx}
+      randomBall = Random.pair shouldMirror (Random.pair vx vy)
+  in Random.generate NewBall (Random.map toBall randomBall)
+
+gameLost : Model -> (Model, Cmd Msg)
 gameLost model =
   let ball = model.ball
       leftPaddle = model.leftPaddle
       rightPaddle = model.rightPaddle
   in if ball.x < -(getMaxX model.canvas) then
-        { model | rightPaddle = { rightPaddle | score = rightPaddle.score + 1 }
-          , ball = model0.ball
-        }
+        ( { model | rightPaddle =
+            { rightPaddle | score = rightPaddle.score + 1 }
+          }
+        , makeNewBall
+        )
      else if ball.x > getMaxX model.canvas then
-        { model | leftPaddle = { leftPaddle | score = leftPaddle.score + 1 }
-          , ball = model0.ball
-        }
-     else model
+        ( { model | leftPaddle =
+            { leftPaddle | score = leftPaddle.score + 1 }
+          }
+        , makeNewBall
+        )
+     else (model, Cmd.none)
 
 increaseSpeed : Time.Time -> Model -> Model
 increaseSpeed timeDiff model =
@@ -285,9 +338,7 @@ increaseSpeed timeDiff model =
 movePaddleKeyboard : Model -> Time.Time -> Int -> Paddle -> Paddle
 movePaddleKeyboard model timeDiff direction paddle =
   let newPos = toFloat direction * getMaxY model.canvas
-  in if direction == 0 then
-        paddle else
-        movePaddle timeDiff model newPos paddle
+  in direction /= 0 ? movePaddle timeDiff model newPos <| paddle
 
 tickPaddle : Time.Time -> Model -> Paddle -> Paddle
 tickPaddle timeDiff model paddle =
@@ -306,7 +357,7 @@ tickPaddles timeDiff model =
   , rightPaddle = tickPaddle timeDiff model model.rightPaddle
   }
 
-onTick : Time.Time -> Model -> Model
+onTick : Time.Time -> Model -> (Model, Cmd Msg)
 onTick timeDiff model =
   if model.state == Running then
      model
@@ -315,17 +366,15 @@ onTick timeDiff model =
        |> ballCollision
        |> increaseSpeed timeDiff
        |> gameLost
-  else model
+  else (model, Cmd.none)
 
-toggleState : Bool -> Model -> Model
-toggleState do model =
-  if do then
-     { model | state =
-       case model.state of
-         Running -> Paused
-         Paused  -> Running
-     }
-  else model
+toggleState : Model -> Model
+toggleState model =
+  { model | state =
+     case model.state of
+       Running -> Paused
+       Paused  -> Running
+  }
 
 cyclePlayerType : Paddle -> Paddle
 cyclePlayerType paddle =
@@ -348,17 +397,18 @@ changeRightPlayer model =
   { model | rightPaddle = cyclePlayerType model.rightPaddle }
 
 --- Update ---
-update : Msg -> Model -> Model
+update : Msg -> Model -> (Model, Cmd Msg)
 update msg model =
   case msg of
-    NoOp -> model
-    MouseMove pos -> onMouseMove model pos
-    ArrowPressed dir -> onArrowPressed model dir
-    WasdPressed dir -> onWasdPressed model dir
-    SpacePressed pressed -> toggleState pressed model
+    NoOp -> (model, Cmd.none)
+    MouseMove pos -> (onMouseMove model pos, Cmd.none)
+    ArrowPressed dir -> (onArrowPressed model dir, Cmd.none)
+    WasdPressed dir -> (onWasdPressed model dir, Cmd.none)
+    SpacePressed pressed -> (pressed ? toggleState <| model, Cmd.none)
     Tick time -> onTick time model
-    ChangeLeftPlayer -> changeLeftPlayer model
-    ChangeRightPlayer -> changeRightPlayer model
+    ChangeLeftPlayer -> (changeLeftPlayer model, Cmd.none)
+    ChangeRightPlayer -> (changeRightPlayer model, Cmd.none)
+    NewBall newBall -> ( { model | ball = newBall }, Cmd.none)
 
 ---- Keyboard handling -----
 upArrow : Keyboard.KeyCode
@@ -544,8 +594,8 @@ subscriptions model =
 
 main : Program Never
 main = Html.App.program
-  { init = (model0, Cmd.none)
-  , update = (\msg model -> (update msg model, Cmd.none))
+  { init = (model0, makeNewBall)
+  , update = update
   , subscriptions = subscriptions
   , view = Html.Lazy.lazy view
   }
