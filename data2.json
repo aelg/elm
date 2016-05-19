@@ -1,0 +1,6 @@
+
+{ "aString" : "this is a string in data2.json"
+, "aFloat" : 2.2
+, "aNumber" : 2
+, "aList" : [3, 2, 1]
+}
