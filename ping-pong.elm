@@ -1,11 +1,10 @@
 import Html
+import Html.Attributes
 import Html.App
-import Html.Lazy
-import Collage exposing (..)
-import Element exposing (..)
+import Svg exposing (..)
+import Svg.Attributes exposing (..)
 import Color exposing (..)
 import Time
-import Text
 import Mouse
 import Keyboard
 import AnimationFrame
@@ -310,20 +309,11 @@ makeNewBall =
 gameLost : Model -> (Model, Cmd Msg)
 gameLost model =
   let ball = model.ball
-      leftPaddle = model.leftPaddle
-      rightPaddle = model.rightPaddle
+      increaseScore paddle = { paddle | score = paddle.score + 1 }
   in if ball.x < -(getMaxX model.canvas) then
-        ( { model | rightPaddle =
-            { rightPaddle | score = rightPaddle.score + 1 }
-          }
-        , makeNewBall
-        )
+        { model | rightPaddle = increaseScore model.rightPaddle } ! [makeNewBall]
      else if ball.x > getMaxX model.canvas then
-        ( { model | leftPaddle =
-            { leftPaddle | score = leftPaddle.score + 1 }
-          }
-        , makeNewBall
-        )
+        { model | leftPaddle = increaseScore model.leftPaddle } ! [makeNewBall]
      else (model, Cmd.none)
 
 increaseSpeed : Time.Time -> Model -> Model
@@ -401,14 +391,14 @@ update : Msg -> Model -> (Model, Cmd Msg)
 update msg model =
   case msg of
     NoOp -> (model, Cmd.none)
-    MouseMove pos -> (onMouseMove model pos, Cmd.none)
-    ArrowPressed dir -> (onArrowPressed model dir, Cmd.none)
-    WasdPressed dir -> (onWasdPressed model dir, Cmd.none)
-    SpacePressed pressed -> (pressed ? toggleState <| model, Cmd.none)
+    MouseMove pos -> onMouseMove model pos ! [Cmd.none]
+    ArrowPressed dir -> onArrowPressed model dir ! [Cmd.none]
+    WasdPressed dir -> onWasdPressed model dir ! [Cmd.none]
+    SpacePressed pressed -> (pressed ? toggleState <| model) ! [Cmd.none]
     Tick time -> onTick time model
-    ChangeLeftPlayer -> (changeLeftPlayer model, Cmd.none)
-    ChangeRightPlayer -> (changeRightPlayer model, Cmd.none)
-    NewBall newBall -> ( { model | ball = newBall }, Cmd.none)
+    ChangeLeftPlayer -> changeLeftPlayer model ! [Cmd.none]
+    ChangeRightPlayer -> changeRightPlayer model ! [Cmd.none]
+    NewBall newBall -> { model | ball = newBall } ! [Cmd.none]
 
 ---- Keyboard handling -----
 upArrow : Keyboard.KeyCode
@@ -453,47 +443,96 @@ keyUp model code =
      NoOp
 
 ----- View -----
-paddle : Paddle -> Form
+
+paddle : Paddle -> Svg Msg
 paddle paddle =
-  rect paddle.width paddle.height
-    |> filled paddle.color
-    |> moveY paddle.y
-    |> moveX paddle.x
+  rect
+    [ x (toString <| paddle.x - paddle.width/2)
+    , y (toString <| -paddle.y - paddle.height/2)
+    , width (toString paddle.width)
+    , height (toString paddle.height)
+    , colorFill paddle.color
+    ]
+    []
 
-ball : Ball -> Form
+ball : Ball -> Svg Msg
 ball ball =
-  circle ball.size
-    |> filled ball.color
-    |> move (ball.x, ball.y)
+  circle
+    [ cx (toString ball.x)
+    , cy (toString -ball.y)
+    , r (toString ball.size)
+    , colorFill white
+    ]
+    []
 
-shadowBall : Ball -> Form
+shadowBall : Ball -> Svg Msg
 shadowBall ball =
-  circle ball.size
-    |> filled ball.color
-    |> alpha 0.5
-    |> move (ball.lastx, ball.lasty)
+  circle
+    [ cx (toString ball.lastx)
+    , cy (toString -ball.lasty)
+    , r (toString ball.size)
+    , colorFill white
+    , fillOpacity "0.5"
+    ]
+    []
 
-canvas : Canvas -> List Form -> Element
-canvas canvas =
-  collage canvas.width canvas.height
-    >> color canvas.color
+background : Svg Msg
+background =
+  rect
+    [ width "100%"
+    , height "100%"
+    , colorFill black
+    ]
+    []
 
-scoreText : Color -> String -> Element
-scoreText color =
-  Text.fromString
-    >> Text.height 30
-    >> Text.monospace
-    >> Text.color color
-    >> leftAligned
+colorFill : Color -> Svg.Attribute Msg
+colorFill color =
+  let rgb = toRgb color
+  in
+    fill <|
+      "rgb(" ++ toString rgb.red ++
+      ", " ++ toString rgb.green ++
+      ", " ++ toString rgb.blue ++
+      ")"
 
-playerTypeText : Color -> String -> Element
-playerTypeText color =
-  Text.fromString
-    >> Text.height 10
-    >> Text.monospace
-    >> Text.bold
-    >> Text.color color
-    >> centered
+translate : Int -> Int -> Svg.Attribute Msg
+translate x y =
+  transform ("translate(" ++ toString x ++ " " ++ toString y ++ ")")
+
+canvas : (Int, Int) -> List (Svg Msg) -> Html.Html Msg
+canvas (canvasWidth, canvasHeight) elements =
+  svg [ width (toString canvasWidth)
+      , height (toString canvasHeight)
+      , fill "black"
+      ]
+      [ background
+      , g [ translate (canvasWidth//2) (canvasHeight//2) ] elements
+      ]
+
+scoreText : Color -> String -> Svg Msg
+scoreText color text =
+  tspan
+    [ fontSize "30"
+    , fontFamily "monospace"
+    , textAnchor "middle"
+    , colorFill color
+    , y "-1.6em"
+    , dy "1.6em"
+    ]
+    [ Svg.text text ]
+
+playerTypeText : Color -> String -> Svg Msg
+playerTypeText color text =
+  tspan
+    [ fontSize "10"
+    , fontFamily "monospace"
+    , fontWeight "bold"
+    , textAnchor "middle"
+    , colorFill color
+    , dy "1.6em"
+    , x "0"
+    ]
+    [ Svg.text text ]
 
 scoreColor : Int -> Int -> Color
 scoreColor myScore theirScore =
@@ -501,11 +540,11 @@ scoreColor myScore theirScore =
   else if myScore < theirScore then red
   else yellow
 
-paddleScore : Paddle -> Color -> Element
+paddleScore : Paddle -> Color -> Svg Msg
 paddleScore paddle color =
   scoreText color ( paddle.name ++ ": " ++ toString paddle.score)
 
-playerType : Paddle -> Element
+playerType : Paddle -> Svg Msg
 playerType paddle =
   playerTypeText green <| case paddle.controlledBy of
     MouseControls -> "Mouse"
@@ -515,63 +554,63 @@ playerType paddle =
     HardComputer -> "Computer - Hard"
     InsaneComputer -> "Computer - Insane"
 
-score : Model -> Element
+score : Model -> Svg Msg
 score model =
-  let canvasWidth = model.canvas.width
-      scoreHeight = model.scoreHeight
-      leftColor = scoreColor model.leftPaddle.score model.rightPaddle.score
+  let leftColor = scoreColor model.leftPaddle.score model.rightPaddle.score
       rightColor = scoreColor model.rightPaddle.score model.leftPaddle.score
-      scoreContainer = container (canvasWidth//2) (scoreHeight//2+10)  midBottom
-      playerTypeContainer = container (canvasWidth//2) (scoreHeight//2-10) midTop
-  in flow right
-      [ flow down
-        [ paddleScore model.leftPaddle leftColor
-            |> scoreContainer
-        , playerType model.leftPaddle
-            |> playerTypeContainer
-        ]
-      , flow down
-        [ paddleScore model.rightPaddle rightColor
-            |> scoreContainer
-        , playerType model.rightPaddle
-            |> playerTypeContainer
-        ]
-      ]
-     |> container canvasWidth scoreHeight middle
-     |> color black
-
-pauseMessageText : String -> Element
-pauseMessageText =
-  Text.fromString
-    >> Text.height 12
-    >> Text.monospace
-    >> Text.color white
-    >> centered
-
-pauseMessage : Model -> Form
-pauseMessage model =
-    toForm
-    <| if model.state == Paused then
-       flow down
-       [ pauseMessageText "Space to pause/unpause."
-       , pauseMessageText "Left/Right arrow to change controls."
+      leftPos = -model.canvas.width//4
+      rightPos =  model.canvas.width//4
+  in canvas (model.canvas.width, model.scoreHeight)
+       [ text' [ translate leftPos 0 ]
+           [ paddleScore model.leftPaddle leftColor
+           , playerType model.leftPaddle
+           ]
+       , text' [ translate rightPos 0 ]
+           [ paddleScore model.rightPaddle rightColor
+           , playerType model.rightPaddle
+           ]
        ]
-       else empty
+
+pauseMessageText : String -> Svg Msg
+pauseMessageText text =
+  tspan [ fontSize "12"
+        , fontFamily "monospace"
+        , textAnchor "middle"
+        , colorFill white
+        , dy "1.6em"
+        , x "0"
+        ]
+        [ Svg.text text ]
+
+pauseMessage : State -> Svg Msg
+pauseMessage state =
+     text' [] <|
+       if state == Paused then
+          [ pauseMessageText "Space to pause/unpause."
+          , pauseMessageText "Left/Right arrow to change controls."
+          ]
+       else
+          []
+
+game : Model -> Html.Html Msg
+game model =
+  canvas (model.canvas.width, model.canvas.height)
+    [ background
+    , paddle model.leftPaddle
+    , paddle model.rightPaddle
+    , shadowBall model.ball -- gray previous position of ball to see movement when paused.
+    , ball model.ball
+    , pauseMessage model.state
+    ]
 
 view : Model -> Html.Html Msg
 view model =
-  toHtml <| flow down
-    [ canvas model.canvas
-        [ paddle model.leftPaddle
-        , paddle model.rightPaddle
-        , shadowBall model.ball -- gray previous position of ball to see movement when paused.
-        , ball model.ball
-        , pauseMessage model
-        ]
-    , spacer model.canvas.width 1
+  Html.div
+    [ Html.Attributes.style [ ("width", toString model.canvas.width ++ "px") ]
+    ]
+    [ game model
     , score model
     ]
-
 
 
 ----- Subscriptions -----
@@ -597,5 +636,5 @@ main = Html.App.program
   { init = (model0, makeNewBall)
   , update = update
   , subscriptions = subscriptions
-  , view = Html.Lazy.lazy view
+  , view = view
   }
